@@ -2,6 +2,7 @@ import AppKit
 import ScreenCaptureKit
 import Carbon.HIToolbox
 import Darwin
+import CoreVideo
 
 @main
 struct RegressionTests {
@@ -197,6 +198,74 @@ struct RegressionTests {
         do { _ = try ScrollMatcher.match(frame1, page.rows(0..<200)); fatalError("Different size accepted") }
         catch { check(true, "Long capture rejects changed viewport dimensions") }
 
+        // Use actual text on a white page, not only random noise. Repeated rows,
+        // empty margins and fractional smooth scrolling are the difficult cases.
+        func documentPage(width: Int, height: Int, table: Bool = false) throws -> PixelRaster {
+            let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height,
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: width * 4, bitsPerPixel: 32)!
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+            NSColor.white.setFill(); NSBezierPath(rect: CGRect(x: 0, y: 0, width: width, height: height)).fill()
+            let phrases = ["Continuous capture keeps document lines in order", "A screenshot should not require pauses", "Fast movement uses overlapping live frames", "Duplicate sections must never be appended", "Copy the finished image directly", "Numbers and paragraph lengths change the content"]
+            for row in 0..<(height / 34) {
+                let text = String(format: "%04d  ", row) + phrases[row % phrases.count] + " / " + String(row * 193 + 17)
+                let line = table ? String(format: "Item %04d   total %08d", row, row * 719 + 4321) : text
+                (line as NSString).draw(at: CGPoint(x: 36, y: height - 34 * row - 30),
+                    withAttributes: [.font: NSFont.monospacedSystemFont(ofSize: 18, weight: .regular), .foregroundColor: NSColor.black])
+            }
+            NSGraphicsContext.restoreGraphicsState()
+            return try PixelRaster(bitmap.cgImage!)
+        }
+        let textDocument = try documentPage(width: 1280, height: 10000)
+        let viewportHeight = 1200
+        var continuous = ScrollStitcher(first: textDocument.rows(0..<viewportHeight))
+        let naturalOffsets = [19, 45, 82, 143, 245, 410, 680, 1070, 1610, 2330, 3210, 4000, 4520, 4860, 5100]
+        let benchmarkStart = ContinuousClock.now
+        for offset in naturalOffsets { _ = try continuous.append(textDocument.rows(offset..<(offset + viewportHeight))) }
+        let elapsed = benchmarkStart.duration(to: .now)
+        try check(try PixelRaster(continuous.image()!).bytes == textDocument.rows(0..<(5100 + viewportHeight)).bytes,
+              "Natural and fast continuous text scrolling produces exact pixels without gaps or overlap")
+        print("BENCHMARK: 1280 × 1200 text frames, \(naturalOffsets.count) matches in \(elapsed)")
+        for offset in [4880, 4670, 4510, 4700, 4900, 5100, 5200] {
+            _ = try continuous.append(textDocument.rows(offset..<(offset + viewportHeight)))
+        }
+        try check(try PixelRaster(continuous.image()!).bytes == textDocument.rows(0..<(5200 + viewportHeight)).bytes,
+              "Scrolling backward and forward appends only content beyond the previous endpoint")
+        var slow = ScrollStitcher(first: textDocument.rows(0..<viewportHeight))
+        for offset in stride(from: 3, through: 150, by: 3) { _ = try slow.append(textDocument.rows(offset..<(offset + viewportHeight))) }
+        check(slow.height == viewportHeight + 150, "Small continuous movements do not accumulate duplicated rows")
+        func fractionalViewport(_ offset: Double) -> PixelRaster {
+            let y = Int(offset), fraction = offset - Double(y)
+            var output = textDocument.rows(y..<(y + viewportHeight))
+            let following = textDocument.rows((y + 1)..<(y + 1 + viewportHeight))
+            for i in output.bytes.indices {
+                output.bytes[i] = UInt8((Double(output.bytes[i]) * (1 - fraction) + Double(following.bytes[i]) * fraction).rounded())
+            }
+            return output
+        }
+        var fractional = ScrollStitcher(first: textDocument.rows(0..<viewportHeight))
+        var fractionalAccepted = 0
+        for frame in 1...40 {
+            if (try? fractional.append(fractionalViewport(Double(frame) * 0.6))) == true { fractionalAccepted += 1 }
+        }
+        check(abs(fractional.height - viewportHeight - 24) <= 1 && fractionalAccepted >= 10,
+              "Fractional smooth scrolling does not round up each frame into duplicated content")
+        let tableDocument = try documentPage(width: 1280, height: 4000, table: true)
+        var tableCapture = ScrollStitcher(first: tableDocument.rows(0..<viewportHeight))
+        for offset in [20, 58, 170, 415, 740, 1100, 1500] { _ = try tableCapture.append(tableDocument.rows(offset..<(offset + viewportHeight))) }
+        try check(try PixelRaster(tableCapture.image()!).bytes == tableDocument.rows(0..<(1500 + viewportHeight)).bytes,
+              "A narrow repeated table on a wide white page aligns by its distinct row content")
+        let stickyHeader = patterned(width: 1280, height: 48), stickyFooter = patterned(width: 1280, height: 36)
+        func stickyFrame(_ offset: Int) -> PixelRaster {
+            PixelRaster(width: 1280, height: viewportHeight,
+                bytes: stickyHeader.bytes + textDocument.rows(offset..<(offset + viewportHeight - 84)).bytes + stickyFooter.bytes)
+        }
+        var sticky = ScrollStitcher(first: stickyFrame(0))
+        for offset in [30, 110, 250, 460, 650] { _ = try sticky.append(stickyFrame(offset)) }
+        let stickyExpected = stickyHeader.bytes + textDocument.rows(0..<(650 + viewportHeight - 84)).bytes + stickyFooter.bytes
+        try check(try PixelRaster(sticky.image()!).bytes == stickyExpected, "Fixed headers and footers appear once rather than at every join")
+
         let turned = try ImageTransform.apply(frame1.image()!, quarterTurns: 1, flipHorizontal: false, flipVertical: false)
         check(turned.width == 240 && turned.height == 96, "Pin rotation swaps dimensions")
         let restored = try ImageTransform.apply(turned, quarterTurns: -1, flipHorizontal: false, flipVertical: false)
@@ -373,17 +442,30 @@ struct RegressionTests {
         check(visible.contains(CGRect(origin: fullOrigin, size: panelSize)), "Full-screen selections keep scroll controls reachable")
 
         final class SyntheticScrollSource: ScrollingCaptureSource {
-            let images: [CGImage]
+            let images: [PixelRaster]
             var count = 0
             var fails = false
-            init(_ images: [CGImage]) { self.images = images }
-            func capture() async throws -> CGImage {
-                count += 1
+            var stopped = false
+            var continuation: AsyncThrowingStream<PixelRaster, Error>.Continuation?
+            var producer: Task<Void, Never>?
+            init(_ images: [PixelRaster]) { self.images = images }
+            func frames() async throws -> AsyncThrowingStream<PixelRaster, Error> {
                 if fails { throw Failure.occupied }
-                return images[min(count - 1, images.count - 1)]
+                let (stream, continuation) = AsyncThrowingStream<PixelRaster, Error>.makeStream()
+                self.continuation = continuation
+                producer = Task {
+                    for image in images {
+                        guard !Task.isCancelled else { return }
+                        count += 1
+                        continuation.yield(image)
+                        try? await Task.sleep(for: .milliseconds(16))
+                    }
+                }
+                return stream
             }
+            func stop() async { stopped = true; producer?.cancel(); continuation?.finish() }
         }
-        let synthetic = SyntheticScrollSource([frame1, frame2, frame2, frame3, frame3].map { $0.image()! })
+        let synthetic = SyntheticScrollSource([frame1, frame2, frame3])
         var closeCount = 0
         var finishedImage: CGImage?
         let scrolling = ScrollingCaptureController(screen: screen, selection: CGRect(x: 20, y: 40, width: 96, height: 240),
@@ -395,7 +477,7 @@ struct RegressionTests {
             if descendants(scrolling.panel.contentView!).compactMap({ $0 as? NSTextField }).contains(where: { $0.stringValue.contains("3 帧") }) { break }
             try await Task.sleep(for: .milliseconds(30))
         }
-        check(scrolling.finishButton.isEnabled && synthetic.count >= 5, "Scroll capture becomes ready and consumes settled synthetic frames")
+        check(scrolling.finishButton.isEnabled && synthetic.count >= 3, "Continuous capture consumes moving frames without waiting for a duplicate stationary frame")
         if let renderPath = ProcessInfo.processInfo.environment["SCAPARE_TEST_RENDER_DIR"], let content = scrolling.panel.contentView {
             content.layoutSubtreeIfNeeded()
             if let bitmap = content.bitmapImageRepForCachingDisplay(in: content.bounds) {
@@ -405,11 +487,12 @@ struct RegressionTests {
         }
         check(scrolling.panel.contentView!.frame.size == CGSize(width: 440, height: 240), "Live preview cannot enlarge the control panel off-screen")
         scrolling.finishButton.performClick(nil)
+        for _ in 0..<100 { if finishedImage != nil { break }; try await Task.sleep(for: .milliseconds(20)) }
         let completed = try finishedImage.map(PixelRaster.init)
         check(completed?.bytes == stitched.bytes && closeCount == 1, "Finish button returns the stitched image and closes the capture exactly once")
         scrolling.close()
         check(closeCount == 1, "Repeated close cannot deliver a second completion")
-        let failing = SyntheticScrollSource([frame1.image()!]); failing.fails = true
+        let failing = SyntheticScrollSource([frame1]); failing.fails = true
         var failedClosed = false
         let failedScrolling = ScrollingCaptureController(screen: screen, selection: CGRect(x: 0, y: 0, width: 96, height: 240),
             onClose: { failedClosed = true }, makeSource: { failing })
@@ -422,6 +505,76 @@ struct RegressionTests {
               "Initial capture failure remains visible without enabling an empty result")
         failedScrolling.close()
         check(failedClosed, "Failed capture can close and release the capture session")
+
+        // ScreenCaptureKit's BGRA frames must be copied and channel-correct before
+        // the system reuses its surface. The queue must retain the latest bounded tail.
+        var pixelBuffer: CVPixelBuffer?
+        check(CVPixelBufferCreate(kCFAllocatorDefault, 96, 240, kCVPixelFormatType_32BGRA, nil, &pixelBuffer) == kCVReturnSuccess,
+              "Create a synthetic ScreenCaptureKit-format surface")
+        let buffer = pixelBuffer!
+        let receiver = ScrollFrameReceiver()
+        for value in 0..<10 {
+            CVPixelBufferLockBaseAddress(buffer, [])
+            let pointer = CVPixelBufferGetBaseAddress(buffer)!.assumingMemoryBound(to: UInt8.self)
+            let stride = CVPixelBufferGetBytesPerRow(buffer)
+            for y in 0..<240 { for x in 0..<96 {
+                let i = y * stride + x * 4
+                pointer[i] = UInt8(value); pointer[i+1] = 72; pointer[i+2] = 180; pointer[i+3] = 255
+            } }
+            CVPixelBufferUnlockBaseAddress(buffer, [])
+            receiver.receive(buffer)
+        }
+        receiver.finish()
+        var received: [PixelRaster] = []
+        for try await frame in receiver.frames { received.append(frame) }
+        check(received.count == 3 && received.map { $0.bytes[2] } == [7,8,9] && received.allSatisfy { $0.bytes[0] == 180 && $0.bytes[1] == 72 && $0.bytes[3] == 255 },
+              "Bounded stream retains the newest three independent RGBA frames without channel swaps")
+
+        final class BufferedScrollSource: ScrollingCaptureSource {
+            let images: [PixelRaster]
+            var continuation: AsyncThrowingStream<PixelRaster, Error>.Continuation?
+            var stopped = false
+            init(_ images: [PixelRaster]) { self.images = images }
+            func frames() async throws -> AsyncThrowingStream<PixelRaster, Error> {
+                let (stream, continuation) = AsyncThrowingStream<PixelRaster, Error>.makeStream()
+                self.continuation = continuation
+                for image in images { continuation.yield(image) }
+                return stream
+            }
+            func stop() async { stopped = true; continuation?.finish() }
+        }
+        let copySource = BufferedScrollSource([frame1, frame2, frame3])
+        let isolatedPasteboard = NSPasteboard(name: NSPasteboard.Name("Scapare.CopyTest." + UUID().uuidString))
+        defer { isolatedPasteboard.clearContents() }
+        var copyClosed = 0, copyCalls = 0, editCalls = 0
+        let copying = ScrollingCaptureController(screen: screen, selection: CGRect(x: 0, y: 0, width: 96, height: 240),
+            onClose: { copyClosed += 1 }, makeSource: { copySource },
+            onCopy: { image in
+                copyCalls += 1
+                return Clipboard.copy(image: NSImage(cgImage: image, size: CGSize(width: image.width, height: image.height)), to: isolatedPasteboard)
+            }, onFinish: { _ in editCalls += 1 })
+        copying.run()
+        for _ in 0..<100 { if copying.copyButton.isEnabled { break }; try await Task.sleep(for: .milliseconds(5)) }
+        check(copying.copyButton.isEnabled, "Complete and Copy becomes available after the first live frame")
+        copying.copyButton.performClick(nil)
+        for _ in 0..<100 { if copyClosed > 0 { break }; try await Task.sleep(for: .milliseconds(10)) }
+        let copiedPNG = isolatedPasteboard.data(forType: .png)!
+        let copiedPixels = try PixelRaster(NSBitmapImageRep(data: copiedPNG)!.cgImage!)
+        check(copiedPixels.bytes == stitched.bytes && copySource.stopped && copyClosed == 1 && copyCalls == 1 && editCalls == 0,
+              "Complete and Copy drains queued frames into a pasteable exact long image without opening the editor")
+        let retrySource = BufferedScrollSource([frame1])
+        var retryClosed = false, copyAttempts = 0
+        let retryCopy = ScrollingCaptureController(screen: screen, selection: CGRect(x: 0, y: 0, width: 96, height: 240),
+            onClose: { retryClosed = true }, makeSource: { retrySource }, onCopy: { _ in copyAttempts += 1; return copyAttempts > 1 })
+        retryCopy.run()
+        for _ in 0..<100 { if retryCopy.copyButton.isEnabled { break }; try await Task.sleep(for: .milliseconds(5)) }
+        retryCopy.copyButton.performClick(nil)
+        for _ in 0..<100 { if retryCopy.status.stringValue.contains("复制失败") { break }; try await Task.sleep(for: .milliseconds(10)) }
+        check(!retryClosed && retryCopy.copyButton.isEnabled && retryCopy.finishButton.isEnabled,
+              "A clipboard failure preserves the long image and offers retry or editing")
+        retryCopy.copyButton.performClick(nil)
+        for _ in 0..<100 { if retryClosed { break }; try await Task.sleep(for: .milliseconds(10)) }
+        check(retryClosed && copyAttempts == 2, "Copy can retry after the stream has stopped without restarting capture")
 
         let socketDirectory = URL(fileURLWithPath: "/private/tmp/sc-ipc-" + String(UUID().uuidString.prefix(8)))
         defer { try? FileManager.default.removeItem(at: socketDirectory) }

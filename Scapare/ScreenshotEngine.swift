@@ -94,30 +94,6 @@ enum ScreenshotEngine {
     }
 }
 
-@MainActor
-final class RegionCaptureSource: ScrollingCaptureSource {
-    private let filter: SCContentFilter
-    private let config: SCStreamConfiguration
-    private let displayID: CGDirectDisplayID
-    private let screenSize: CGSize
-    init(screen: NSScreen, selection: CGRect) async throws {
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-        guard let id = screen.displayID, let display = content.displays.first(where: { $0.displayID == id }) else { throw ScreenshotError.noDisplays }
-        displayID = id; screenSize = screen.frame.size
-        let own = content.applications.filter { $0.processID == ProcessInfo.processInfo.processIdentifier }
-        filter = SCContentFilter(display: display, excludingApplications: own, exceptingWindows: [])
-        config = SCStreamConfiguration()
-        let rect = selection.intersection(CGRect(origin: .zero, size: screen.frame.size))
-        config.sourceRect = CGRect(x: rect.minX, y: screen.frame.height - rect.maxY, width: rect.width, height: rect.height)
-        config.width = Int(rect.width * screen.backingScaleFactor); config.height = Int(rect.height * screen.backingScaleFactor)
-        config.showsCursor = false; config.captureResolution = .best
-    }
-    func capture() async throws -> CGImage {
-        guard let screen = NSScreen.screens.first(where: { $0.displayID == displayID }), screen.frame.size == screenSize else { throw ImageError.incompatible }
-        return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
-    }
-}
-
 extension ScreenshotEngine {
     static func captureDesktop() async throws -> NSImage {
         let shots = try await captureAllDisplays()

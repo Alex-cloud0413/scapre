@@ -2,8 +2,12 @@ import AppKit
 
 @MainActor
 protocol ScrollingCaptureSource {
-    func capture() async throws -> CGImage
+    func frames() async throws -> AsyncThrowingStream<PixelRaster, Error>
+    func stop() async
+    func validateDisplay() throws
 }
+
+extension ScrollingCaptureSource { func validateDisplay() throws {} }
 
 @MainActor
 final class ScrollingCaptureController: NSObject, NSWindowDelegate {
@@ -16,11 +20,18 @@ final class ScrollingCaptureController: NSObject, NSWindowDelegate {
     private let preview = NSImageView()
     private let progress = NSTextField(labelWithString: "")
     private var task: Task<Void, Never>?
-    private var stitcher: ScrollStitcher?
+    let copyButton = NSButton(title: "完成并复制", target: nil, action: nil)
+    private let assembler = ScrollCaptureAssembler()
+    private var source: (any ScrollingCaptureSource)?
+    private enum FinishAction { case edit, copy }
+    private var finishAction: FinishAction?
+    private var loopEnded = false
+    private var delivering = false
     private var paused = false
     private var closed = false
     private let onClose: () -> Void
     private let onFinish: @MainActor (CGImage) -> Void
+    private let onCopy: @MainActor (CGImage) -> Bool
     private let makeSource: @MainActor () async throws -> any ScrollingCaptureSource
 
     static func start(screen: NSScreen, selection: CGRect, onClose: @escaping () -> Void) {
@@ -32,11 +43,13 @@ final class ScrollingCaptureController: NSObject, NSWindowDelegate {
 
     init(screen: NSScreen, selection: CGRect, onClose: @escaping () -> Void,
          makeSource: (@MainActor () async throws -> any ScrollingCaptureSource)? = nil,
+         onCopy: @escaping @MainActor (CGImage) -> Bool = { Clipboard.copy(image: NSImage(cgImage: $0, size: CGSize(width: $0.width, height: $0.height))) },
          onFinish: @escaping @MainActor (CGImage) -> Void = {
              ImageWorkspace.open(NSImage(cgImage: $0, size: CGSize(width: $0.width, height: $0.height)), title: "长截图 · Scapare")
          }) {
         self.onClose = onClose
         self.onFinish = onFinish
+        self.onCopy = onCopy
         self.makeSource = makeSource ?? { try await RegionCaptureSource(screen: screen, selection: selection) }
         let region = selection.offsetBy(dx: screen.frame.minX, dy: screen.frame.minY)
         panel = NSPanel(contentRect: CGRect(origin: .zero, size: CGSize(width: 440, height: 240)),
@@ -65,7 +78,7 @@ final class ScrollingCaptureController: NSObject, NSWindowDelegate {
         outline.layer?.borderWidth = 3
         regionOutline.contentView = outline
 
-        let hint = NSTextField(wrappingLabelWithString: "将鼠标移到框内，缓慢向下滚动并稍作停顿。内容会自动拼接。")
+        let hint = NSTextField(wrappingLabelWithString: "在框内自然向下滚动，画面会连续拼接。完成后可直接复制，或继续编辑。")
         hint.font = .systemFont(ofSize: 12)
         hint.textColor = .secondaryLabelColor
         status.font = .systemFont(ofSize: 13, weight: .medium)
@@ -81,9 +94,16 @@ final class ScrollingCaptureController: NSObject, NSWindowDelegate {
         pauseButton.toolTip = "暂时停止采集，保留已拼接的内容"
         let cancel = NSButton(title: "取消", target: self, action: #selector(cancel))
         cancel.toolTip = "取消本次滚动截图"
-        let buttons = NSStackView(views: [cancel, pauseButton, finishButton])
+        copyButton.target = self
+        copyButton.action = #selector(finishAndCopy)
+        copyButton.isEnabled = false
+        copyButton.toolTip = "结束滚动并复制长图，可直接粘贴到其他应用"
+        copyButton.keyEquivalent = "\r"
+        let auxiliaryButtons = NSStackView(views: [cancel, pauseButton])
+        auxiliaryButtons.spacing = 8
+        let buttons = NSStackView(views: [finishButton, copyButton])
         buttons.spacing = 8
-        let stack = NSStackView(views: [status, hint, progress, buttons])
+        let stack = NSStackView(views: [status, hint, progress, auxiliaryButtons, buttons])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 12
@@ -125,45 +145,30 @@ final class ScrollingCaptureController: NSObject, NSWindowDelegate {
     func run() {
         guard task == nil, !closed else { return }
         task = Task { [weak self] in
+            guard let self else { return }
             do {
-                guard let source = try await self?.makeSource() else { return }
-                // Let the original window finish activating before taking the first frame.
-                try await Task.sleep(for: .milliseconds(250))
-                let first = try await source.capture()
-                let initial = try await Task.detached { try PixelRaster(first) }.value
-                guard !Task.isCancelled, let self, !self.closed else { return }
-                self.stitcher = ScrollStitcher(first: initial)
-                self.finishButton.isEnabled = true
-                self.pauseButton.isEnabled = true
-                self.updatePreview()
-                self.status.stringValue = "已就绪，可在框内向下滚动"
-                var lastSample = initial
-                while !Task.isCancelled && !self.closed {
-                    try await Task.sleep(for: .milliseconds(350))
+                let source = try await self.makeSource()
+                self.source = source
+                guard !Task.isCancelled, !self.closed else { await source.stop(); return }
+                let frames = try await source.frames()
+                var lastDisplayCheck = ContinuousClock.now
+                for try await raster in frames {
+                    guard !Task.isCancelled, !self.closed else { break }
                     guard !self.paused else { continue }
-                    let image = try await source.capture()
-                    let last = lastSample
-                    let (raster, stable) = try await Task.detached {
-                        let raster = try PixelRaster(image)
-                        return (raster, ScrollMatcher.isUnchanged(last, raster))
-                    }.value
-                    guard !Task.isCancelled, !self.closed else { return }
-                    lastSample = raster
-                    guard !self.paused else { continue }
-                    guard stable, let previous = self.stitcher else {
-                        self.status.stringValue = "正在滚动，稍停片刻即可拼接"
-                        continue
+                    if lastDisplayCheck.duration(to: .now) > .seconds(1) {
+                        try source.validateDisplay()
+                        lastDisplayCheck = .now
                     }
                     do {
-                        let (updated, appended) = try await Task.detached {
-                            var copy = previous
-                            let appended = try copy.append(raster)
-                            return (copy, appended)
-                        }.value
-                        guard !Task.isCancelled, !self.closed, !self.paused else { continue }
-                        self.stitcher = updated
-                        if appended { self.updatePreview() }
-                        self.status.stringValue = "已拼接，可继续向下滚动或完成"
+                        let update = try await self.assembler.accept(raster)
+                        guard !Task.isCancelled, !self.closed else { break }
+                        self.progress.stringValue = "\(update.frameCount) 帧 · \(update.width) × \(update.height) px"
+                        if let image = update.preview { self.preview.image = NSImage(cgImage: image, size: CGSize(width: image.width, height: image.height)) }
+                        if self.finishAction == nil {
+                            self.finishButton.isEnabled = true; self.copyButton.isEnabled = true
+                            self.pauseButton.isEnabled = true
+                            self.status.stringValue = self.paused ? "已暂停，已拼接内容会保留" : "正在连续拼接，可直接完成并复制"
+                        }
                     } catch {
                         self.status.stringValue = error.localizedDescription
                         if case ImageError.tooLarge = error {
@@ -173,30 +178,58 @@ final class ScrollingCaptureController: NSObject, NSWindowDelegate {
                     }
                 }
             } catch {
-                guard !Task.isCancelled, let self, !self.closed else { return }
-                self.status.stringValue = "捕获已停止：" + error.localizedDescription
-                self.pauseButton.isEnabled = false
-                // Keep Cancel available, and allow exporting any frames already captured.
+                if !Task.isCancelled, !self.closed {
+                    self.status.stringValue = "捕获已停止：" + error.localizedDescription
+                    self.pauseButton.isEnabled = false
+                }
             }
+            await self.source?.stop()
+            self.loopEnded = true
+            if self.finishAction != nil { await self.deliverResult() }
         }
     }
 
-    private func updatePreview() {
-        guard let stitcher else { return }
-        progress.stringValue = "\(stitcher.frameCount) 帧 · \(stitcher.previous.width) × \(stitcher.height) px"
-        if let image = stitcher.preview(maxSize: CGSize(width: 192, height: 416)) {
-            preview.image = NSImage(cgImage: image, size: CGSize(width: image.width, height: image.height))
-        }
-    }
     @objc private func togglePause() {
         paused.toggle()
         pauseButton.title = paused ? "继续" : "暂停"
-        status.stringValue = paused ? "已暂停，已拼接内容会保留" : "可继续向下滚动"
+        status.stringValue = paused ? "已暂停，已拼接内容会保留" : "正在连续拼接"
     }
-    @objc func finish() {
-        guard !closed, let image = stitcher?.image() else { return }
-        close()
-        onFinish(image)
+    @objc func finish() { requestFinish(.edit) }
+    @objc func finishAndCopy() { requestFinish(.copy) }
+    private func requestFinish(_ action: FinishAction) {
+        guard !closed, finishAction == nil else { return }
+        finishAction = action
+        paused = false
+        finishButton.isEnabled = false; copyButton.isEnabled = false; pauseButton.isEnabled = false
+        status.stringValue = "正在处理最后的画面…"
+        // Finish the stream, then drain already delivered frames before exporting.
+        // Cancelling the consumer here would silently lose the last scroll movement.
+        Task { [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(for: .milliseconds(60))
+            await self.source?.stop()
+            if self.loopEnded { await self.deliverResult() }
+        }
+    }
+    private func deliverResult() async {
+        guard !closed, !delivering, let action = finishAction else { return }
+        delivering = true
+        guard let image = await assembler.image() else {
+            delivering = false; finishAction = nil
+            status.stringValue = "未获得可用画面，请取消后重新截图。"
+            return
+        }
+        guard !closed else { return }
+        switch action {
+        case .copy:
+            if onCopy(image) { close() }
+            else {
+                delivering = false; finishAction = nil
+                finishButton.isEnabled = true; copyButton.isEnabled = true
+                status.stringValue = "复制失败，长图仍然保留。可以重试或打开编辑器保存。"
+            }
+        case .edit: close(); onFinish(image)
+        }
     }
     @objc private func cancel() { close() }
     func close() {
@@ -204,6 +237,7 @@ final class ScrollingCaptureController: NSObject, NSWindowDelegate {
         closed = true
         task?.cancel()
         task = nil
+        if let source { Task { await source.stop() } }
         regionOutline.close()
         panel.close()
         if Self.current === self { Self.current = nil }

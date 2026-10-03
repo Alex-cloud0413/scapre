@@ -49,13 +49,15 @@ extension NSColor {
 
 enum Clipboard {
     // 把一张图片放进系统剪贴板（之后可在别处 ⌘V 粘贴）。
-    static func copy(image: NSImage) {
-        let pb = NSPasteboard.general
+    @discardableResult
+    static func copy(image: NSImage, to pb: NSPasteboard = .general) -> Bool {
+        // Prepare the image before replacing the user's clipboard.
+        guard let data = image.pngData else { return false }
+        let item = NSPasteboardItem()
+        item.setData(data, forType: .png)
+        if let tiff = image.tiffRepresentation { item.setData(tiff, forType: .tiff) }
         pb.clearContents()
-        pb.writeObjects([image])
-        if let data = image.pngData {
-            pb.setData(data, forType: .png)
-        }
+        return pb.writeObjects([item])
     }
 
     // 把一段文字放进系统剪贴板。
