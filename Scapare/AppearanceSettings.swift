@@ -7,7 +7,7 @@ struct AppearanceOptions: Codable, Equatable {
     var fontSize: Double = 14
     var controlsSize: Double = 13
     var spaciousToolbar = false
-    var statusSymbol = "scissors"
+    var statusSymbol = "longjuan"
     var statusClick = 0 // menu, capture, paste
     var magnifierSize: Double = 96
     var magnifierRound = false
@@ -21,14 +21,26 @@ struct AppearanceOptions: Codable, Equatable {
         && [fontSize, controlsSize, magnifierSize, pinOpacity].allSatisfy(\.isFinite)
         && (6...100).contains(fontSize) && (11...18).contains(controlsSize)
         && (64...200).contains(magnifierSize) && (0.1...1).contains(pinOpacity)
-        && ["scissors", "camera", "viewfinder", "crop"].contains(statusSymbol)
+        && ["longjuan", "scissors", "camera", "viewfinder", "crop"].contains(statusSymbol)
         && (1...32).contains(palette.count) && palette.allSatisfy { NSColor(hex: $0) != nil }
     }
 }
 enum AppearanceSettings {
     static let changed = Notification.Name("ScapareAppearanceChanged")
-    static var options: AppearanceOptions {
-        guard let data = UserDefaults.standard.data(forKey: "appearance_v1"), let result = try? JSONDecoder().decode(AppearanceOptions.self, from: data), result.isValid else { return AppearanceOptions() }
+    static let statusSymbols = ["longjuan", "scissors", "camera", "viewfinder", "crop"]
+    static func migrateBrandIcon(in defaults: UserDefaults = .standard) {
+        guard !defaults.bool(forKey: "longjuan_icon_migrated_v1") else { return }
+        var value = options(in: defaults)
+        if value.statusSymbol == "scissors" {
+            value.statusSymbol = "longjuan"
+            guard let data = try? JSONEncoder().encode(value) else { return }
+            defaults.set(data, forKey: "appearance_v1")
+        }
+        defaults.set(true, forKey: "longjuan_icon_migrated_v1")
+    }
+    static var options: AppearanceOptions { options(in: .standard) }
+    static func options(in defaults: UserDefaults) -> AppearanceOptions {
+        guard let data = defaults.data(forKey: "appearance_v1"), let result = try? JSONDecoder().decode(AppearanceOptions.self, from: data), result.isValid else { return AppearanceOptions() }
         return result
     }
     static var accent: NSColor { NSColor(hex: options.accent) ?? .controlAccentColor }
@@ -80,7 +92,7 @@ final class AppearanceWindow: NSObject, NSWindowDelegate {
         field("fontName", "标注字体名称（留空为系统）")
         field("fontSize", "默认标注字号")
         field("controls", "工具条字号（11–18）")
-        popup("icon", "菜单栏图标", ["剪刀", "相机", "取景框", "裁剪"])
+        popup("icon", "菜单栏图标", ["长卷（默认）", "剪刀", "相机", "取景框", "裁剪"])
         popup("click", "菜单栏左键", ["打开菜单", "立即截图", "贴出剪贴板"])
         field("magnifier", "放大镜大小（64–200）")
         field("opacity", "新贴图不透明度 %")
@@ -104,14 +116,14 @@ final class AppearanceWindow: NSObject, NSWindowDelegate {
         fields["magnifier"]?.stringValue = String(Int(options.magnifierSize)); fields["opacity"]?.stringValue = String(Int(options.pinOpacity * 100))
         fields["palette"]?.stringValue = options.palette.joined(separator: ", ")
         popups["theme"]?.selectItem(at: options.theme); popups["click"]?.selectItem(at: options.statusClick)
-        popups["icon"]?.selectItem(at: ["scissors", "camera", "viewfinder", "crop"].firstIndex(of: options.statusSymbol) ?? 0)
+        popups["icon"]?.selectItem(at: AppearanceSettings.statusSymbols.firstIndex(of: options.statusSymbol) ?? 0)
         for (key, value) in [("spacious", options.spaciousToolbar), ("round", options.magnifierRound), ("crosshair", options.magnifierCrosshair), ("visible", options.magnifierVisible)] { checks[key]?.state = value ? .on : .off }
     }
     private func selectedOptions() throws -> AppearanceOptions {
         var value = AppearanceSettings.options
         func text(_ key: String) -> String { fields[key]?.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) ?? "" }
         guard let font = Double(text("fontSize")), let controls = Double(text("controls")), let magnifier = Double(text("magnifier")), let opacity = Double(text("opacity")) else { throw AutomationError.invalid("请输入有效的字号、放大镜大小和透明度。") }
-        value.theme = popups["theme"]!.indexOfSelectedItem; value.statusClick = popups["click"]!.indexOfSelectedItem; value.statusSymbol = ["scissors", "camera", "viewfinder", "crop"][popups["icon"]!.indexOfSelectedItem]
+        value.theme = popups["theme"]!.indexOfSelectedItem; value.statusClick = popups["click"]!.indexOfSelectedItem; value.statusSymbol = AppearanceSettings.statusSymbols[popups["icon"]!.indexOfSelectedItem]
         value.accent = text("accent"); value.fontName = text("fontName"); value.fontSize = font; value.controlsSize = controls; value.magnifierSize = magnifier; value.pinOpacity = opacity / 100
         value.palette = text("palette").components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
         value.spaciousToolbar = checks["spacious"]?.state == .on; value.magnifierRound = checks["round"]?.state == .on; value.magnifierCrosshair = checks["crosshair"]?.state == .on; value.magnifierVisible = checks["visible"]?.state == .on

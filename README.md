@@ -36,7 +36,7 @@ scripts/test.sh
 
 Bundle ID 保留 `com.gaoyiming.SnapTool`，用于继续已有 App Store Connect 记录和本地偏好设置身份。它不是面向用户的产品名称。Apple 规定，上传过构建后不能在原有 App 记录中更改 Bundle ID。
 
-当前功能候选版本号为 1.1，构建号为 3（此前审核修复基线为 1.0 (2)，拒审记录是 1.0 (1)）。上传前仍需核对 App Store Connect 最新已使用的构建号，必要时继续递增。改名不会自动修改远端商店名称：商店原名 Scapre 也需在所有语言中统一为 Scapare。
+当前发布候选版本为 1.1.2（构建 7），包含连续滚动截图、完成并复制、纯白底长卷 App 图标和菜单栏长卷图标。Bundle ID 继续沿用原 App Store 记录。商店各语言名称需同步为 Scapare。
 
 ## 当前文档
 
@@ -48,3 +48,9 @@ Bundle ID 保留 `com.gaoyiming.SnapTool`，用于继续已有 App Store Connect
 - `docs/audit-fixes-2026-10-03.md`：12 项代码问题的修复记录、36 项回归检查和实机验收边界。
 
 历史项目说明保存在改名前提交中。当前文档以代码和实际检查结果为准。
+
+## 图标
+
+图形沿用本地「长卷」项目的标识。App 图标为纯白底、黑色线条；菜单栏使用透明单色模板，跟随系统明暗显示。现有默认剪刀图标在首次升级时迁移为长卷，其余外观设置保留。
+
+可复现生成方式：将 `Tools/GenerateBrandIcons.swift` 复制为临时 `main.swift`，与 `Scapare/BrandIcon.swift` 一起编译，再运行并传入 `Scapare/Assets.xcassets/AppIcon.appiconset`。

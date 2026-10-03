@@ -351,6 +351,26 @@ struct RegressionTests {
         check(ClipboardText.image(rich).size.width > 100, "Rich clipboard text renders to a bounded local image")
         var options = AppearanceOptions()
         check(options.isValid, "Default appearance satisfies configuration bounds")
+        check(options.statusSymbol == "longjuan" && BrandIcon.menuBarImage().isTemplate,
+              "New installs use the LongJuan menu bar template")
+        var legacyAppearance = AppearanceOptions()
+        legacyAppearance.statusSymbol = "scissors"; legacyAppearance.theme = 2
+        legacyAppearance.palette = ["00FF00", "0000FF"]
+        defaults.set(try JSONEncoder().encode(legacyAppearance), forKey: "appearance_v1")
+        AppearanceSettings.migrateBrandIcon(in: defaults)
+        var expectedAppearance = legacyAppearance; expectedAppearance.statusSymbol = "longjuan"
+        check(AppearanceSettings.options(in: defaults) == expectedAppearance,
+              "Upgrade replaces default scissors and preserves theme and palette")
+        defaults.set(try JSONEncoder().encode(legacyAppearance), forKey: "appearance_v1")
+        AppearanceSettings.migrateBrandIcon(in: defaults)
+        check(AppearanceSettings.options(in: defaults).statusSymbol == "scissors",
+              "The icon migration never repeats after a user's later choice")
+        defaults.removeObject(forKey: "longjuan_icon_migrated_v1")
+        legacyAppearance.statusSymbol = "camera"
+        defaults.set(try JSONEncoder().encode(legacyAppearance), forKey: "appearance_v1")
+        AppearanceSettings.migrateBrandIcon(in: defaults)
+        check(AppearanceSettings.options(in: defaults) == legacyAppearance,
+              "Upgrade keeps a deliberately selected alternate menu bar icon")
         options.magnifierSize = .infinity
         check(!options.isValid, "Appearance import rejects invalid dimensions")
         options = AppearanceOptions(); options.palette = ["FF0000", "0000FF"]

@@ -25,6 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         SettingsManager.initializeDefaults()
+        AppearanceSettings.migrateBrandIcon()
 
         AppearanceSettings.applyTheme()
         setupStatusItem()
@@ -89,9 +90,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = item.button {
-            let image = NSImage(systemSymbolName: "scissors", accessibilityDescription: "Scapare")
-            image?.isTemplate = true
-            button.image = image
+            button.image = BrandIcon.menuBarImage()
+            button.toolTip = "Scapare"
+            button.setAccessibilityLabel("Scapare 菜单")
         }
 
         let menu = NSMenu()
@@ -195,8 +196,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return event
     }
     private func refreshAppearance() {
-        let image = NSImage(systemSymbolName: AppearanceSettings.options.statusSymbol, accessibilityDescription: "Scapare")
-        image?.isTemplate = true; statusItem?.button?.image = image
+        let symbol = AppearanceSettings.options.statusSymbol
+        let image = symbol == "longjuan" ? BrandIcon.menuBarImage()
+            : NSImage(systemSymbolName: symbol, accessibilityDescription: "Scapare")
+        image?.isTemplate = true
+        statusItem?.button?.image = image ?? BrandIcon.menuBarImage()
         statusItem?.button?.toolTip = "Scapare · 右键打开菜单"
     }
     @objc private func statusClicked() {
