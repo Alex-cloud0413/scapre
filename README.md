@@ -36,7 +36,7 @@ scripts/test.sh
 
 Bundle ID 保留 `com.gaoyiming.SnapTool`，用于继续已有 App Store Connect 记录和本地偏好设置身份。它不是面向用户的产品名称。Apple 规定，上传过构建后不能在原有 App 记录中更改 Bundle ID。
 
-当前发布候选版本为 1.1.2（构建 7），包含连续滚动截图、完成并复制、纯白底长卷 App 图标和菜单栏长卷图标。Bundle ID 继续沿用原 App Store 记录。商店各语言名称需同步为 Scapare。
+当前本机修复版为 1.1.3（构建 8），修复连续滚动时固定侧栏、局部动画和中文字体亚像素位移导致的衔接失败。App Store 已提交的版本仍为 1.1.2（构建 7）；本机修复版需实测后再替换待审版本。Bundle ID 继续沿用原 App Store 记录。
 
 ## 当前文档
 

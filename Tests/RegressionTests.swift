@@ -266,6 +266,128 @@ struct RegressionTests {
         let stickyExpected = stickyHeader.bytes + textDocument.rows(0..<(650 + viewportHeight - 84)).bytes + stickyFooter.bytes
         try check(try PixelRaster(sticky.image()!).bytes == stickyExpected, "Fixed headers and footers appear once rather than at every join")
 
+        // A browser selection can contain a moving feed alongside a stationary
+        // sidebar. Those stationary edges must not veto the document movement.
+        let sidebar = try documentPage(width: 1280, height: viewportHeight, table: true)
+        func browserFrame(_ offset: Int) -> PixelRaster {
+            var raster = stickyFrame(offset)
+            for y in 48..<(viewportHeight - 36) {
+                let start = (y * raster.width + 900) * 4
+                let end = (y + 1) * raster.width * 4
+                raster.bytes.replaceSubrange(start..<end, with: sidebar.bytes[start..<end])
+                // Distinct cards and numbers in the right-hand stationary panel.
+                for x in 925..<1240 where (y % 53 < 16 && x % 29 < 18) {
+                    let i = (y * raster.width + x) * 4
+                    raster.bytes[i] = UInt8((y / 53 * 31 + x / 29 * 7) % 170)
+                    raster.bytes[i+1] = raster.bytes[i]; raster.bytes[i+2] = raster.bytes[i]
+                }
+            }
+            return raster
+        }
+        var browser = ScrollStitcher(first: browserFrame(0))
+        for offset in [19, 45, 82, 143, 245, 410, 680, 1070, 1610] {
+            _ = try browser.append(browserFrame(offset))
+        }
+        check(browser.height == viewportHeight + 1610 && browser.frameCount > 5,
+              "A moving browser feed stitches continuously beside a stationary sidebar")
+        func columnPixels(in raster: PixelRaster, columns: Range<Int>) -> [UInt8] {
+            (0..<raster.height).flatMap { y in
+                Array(raster.bytes[((y * raster.width + columns.lowerBound) * 4)..<((y * raster.width + columns.upperBound) * 4)])
+            }
+        }
+        let browserOutput = try PixelRaster(browser.image()!)
+        let browserExpected = PixelRaster(width: 1280, height: viewportHeight + 1610,
+            bytes: stickyHeader.bytes + textDocument.rows(0..<(1610 + viewportHeight - 84)).bytes + stickyFooter.bytes)
+        check(columnPixels(in: browserOutput, columns: 0..<880) == columnPixels(in: browserExpected, columns: 0..<880),
+              "The browser's moving column preserves every original row without duplicates")
+        let savedBrowserHeight = browser.height
+        do { _ = try browser.append(browserFrame(7500)); fatalError("Browser jump without overlap accepted") }
+        catch { check(browser.height == savedBrowserHeight, "A fixed sidebar cannot hide missing overlap after a large document jump") }
+        func animatedBrowserFrame(_ offset: Int, tick: Int) -> PixelRaster {
+            var raster = browserFrame(offset)
+            for y in 310..<430 { for x in 630..<800 {
+                let i = (y * raster.width + x) * 4
+                raster.bytes[i] = UInt8((x * 7 + y * 11 + tick * 37) % 256)
+                raster.bytes[i+1] = UInt8((x + tick * 29) % 256)
+                raster.bytes[i+2] = UInt8((y * 3 + tick * 13) % 256)
+            } }
+            return raster
+        }
+        var animatedBrowser = ScrollStitcher(first: animatedBrowserFrame(0, tick: 0))
+        for (tick, offset) in [19, 45, 82, 143, 245, 410, 680, 1070, 1610].enumerated() {
+            _ = try animatedBrowser.append(animatedBrowserFrame(offset, tick: tick + 1))
+        }
+        check(animatedBrowser.height == viewportHeight + 1610,
+              "A localized animated card does not require the rest of the page to stop scrolling")
+        var stationaryAnimation = ScrollStitcher(first: animatedBrowserFrame(0, tick: 0))
+        for tick in 1...12 { _ = try? stationaryAnimation.append(animatedBrowserFrame(0, tick: tick)) }
+        check(stationaryAnimation.height == viewportHeight,
+              "Animation without document movement never extends the screenshot")
+
+        // Retina-sized Chinese feed, as in the reported browser screenshot.
+        let chineseWidth = 3349, chineseHeight = 1936, chineseDocumentHeight = 6500
+        let chineseBitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: chineseWidth, pixelsHigh: chineseDocumentHeight,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: chineseWidth * 4, bitsPerPixel: 32)!
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: chineseBitmap)
+        NSColor.white.setFill(); NSBezierPath(rect: CGRect(x: 0, y: 0, width: chineseWidth, height: chineseDocumentHeight)).fill()
+        let chinesePhrases = ["连续滚动时不应要求停下来才能拼接", "固定导航和侧栏不应干扰正文衔接", "每一段内容都应按原来的顺序保存", "加速和回滚之后不能产生重复内容"]
+        for row in 0..<(chineseDocumentHeight / 52) {
+            ("第\(row)行  " + chinesePhrases[row % chinesePhrases.count] + "  \(row * 193 + 17)" as NSString)
+                .draw(at: CGPoint(x: 520, y: chineseDocumentHeight - row * 52 - 42),
+                      withAttributes: [.font: NSFont.systemFont(ofSize: 28), .foregroundColor: NSColor.black])
+        }
+        NSGraphicsContext.restoreGraphicsState()
+        let chinesePage = try PixelRaster(chineseBitmap.cgImage!)
+        let chineseHeader = patterned(width: chineseWidth, height: 240)
+        let chineseSide = patterned(width: 650, height: chineseHeight - 240)
+        func chineseFrame(_ offset: Double) -> PixelRaster {
+            let y = Int(offset), fraction = offset - Double(y)
+            var body = chinesePage.rows(y..<(y + chineseHeight - 240))
+            if fraction > 0 {
+                let following = chinesePage.rows((y + 1)..<(y + 1 + chineseHeight - 240))
+                for i in body.bytes.indices {
+                    body.bytes[i] = UInt8((Double(body.bytes[i]) * (1 - fraction) + Double(following.bytes[i]) * fraction).rounded())
+                }
+            }
+            for row in 0..<body.height {
+                body.bytes.replaceSubrange(((row * chineseWidth + 2100) * 4)..<((row * chineseWidth + 2750) * 4),
+                    with: chineseSide.bytes[(row * 650 * 4)..<((row + 1) * 650 * 4)])
+            }
+            return PixelRaster(width: chineseWidth, height: chineseHeight, bytes: chineseHeader.bytes + body.bytes)
+        }
+        var chineseCapture = ScrollStitcher(first: chineseFrame(0))
+        let chineseOffsets: [Double] = [12.6, 45.2, 87.8, 151.4, 310.6, 650.2, 1120.8, 1800.4, 2500, 2780, 3100]
+        let chineseStart = ContinuousClock.now
+        var chineseMatchTime = Duration.zero
+        for offset in chineseOffsets {
+            let frame = chineseFrame(offset), start = ContinuousClock.now
+            do { _ = try chineseCapture.append(frame) }
+            catch { print("CHINESE_FAILURE at \(offset): \(error)"); throw error }
+            chineseMatchTime += start.duration(to: .now)
+        }
+        check(abs(chineseCapture.height - chineseHeight - 3100) <= 1 && chineseCapture.frameCount > 8,
+              "Retina Chinese text with fixed navigation/sidebar accepts fractional and fast scrolling")
+        print("BENCHMARK: 3349 × 1936 mixed Chinese frames, \(chineseOffsets.count) matches in \(chineseMatchTime); including fixture generation \(chineseStart.duration(to: .now))")
+        var integerChinese = ScrollStitcher(first: chineseFrame(0))
+        for offset in [19, 45, 82, 143, 245, 410, 680, 1070, 1610] { _ = try integerChinese.append(chineseFrame(Double(offset))) }
+        let integerChineseOutput = try PixelRaster(integerChinese.image()!)
+        let integerChineseExpected = PixelRaster(width: chineseWidth, height: chineseHeight + 1610,
+            bytes: chineseHeader.bytes + chinesePage.rows(0..<(chineseHeight - 240 + 1610)).bytes)
+        check(columnPixels(in: integerChineseOutput, columns: 500..<1700) == columnPixels(in: integerChineseExpected, columns: 500..<1700),
+              "Retina Chinese feed keeps exact source rows across successive moving frames")
+        for from in [0.125, 0.375, 0.625, 0.875] {
+            let reference = chineseFrame(from)
+            for to in [0.125, 0.375, 0.625, 0.875] {
+                do {
+                    let shift = try ScrollMatcher.displacement(reference, chineseFrame(150 + to), excludingTop: 240)
+                    check(abs(Double(shift) - (150 + to - from)) <= 1,
+                          "Chinese glyph phases \(from) → \(to) retain the physical displacement")
+                } catch { print("PHASE_FAILURE \(from) → \(to): \(error)"); throw error }
+            }
+        }
+
         let turned = try ImageTransform.apply(frame1.image()!, quarterTurns: 1, flipHorizontal: false, flipVertical: false)
         check(turned.width == 240 && turned.height == 96, "Pin rotation swaps dimensions")
         let restored = try ImageTransform.apply(turned, quarterTurns: -1, flipHorizontal: false, flipVertical: false)
