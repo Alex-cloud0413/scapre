@@ -20,3 +20,15 @@ enum OCRService {
         return try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
     }
 }
+
+extension OCRService {
+    nonisolated static func barcodes(pngData: Data) async throws -> String {
+        try await Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
+            guard let rep = NSBitmapImageRep(data: pngData), let image = rep.cgImage else { throw ImageError.decode }
+            let request = VNDetectBarcodesRequest()
+            try VNImageRequestHandler(cgImage: image).perform([request])
+            return (request.results ?? []).compactMap { $0.payloadStringValue }.joined(separator: "\n")
+        }.value
+    }
+}

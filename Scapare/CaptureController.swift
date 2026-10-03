@@ -1,8 +1,8 @@
 import AppKit
 
 @MainActor
-private struct CaptureEntry {
-    let shots: [DisplayShot]
+private final class CaptureEntry {
+    var shots: [DisplayShot]
     let sessions: [CGDirectDisplayID: EditingSession]
     init(shots: [DisplayShot]) {
         self.shots = shots
@@ -18,12 +18,16 @@ final class CaptureController {
     private var overlays: [OverlayController] = []
     private var isCapturing = false
     private var isSaving = false
-    private var pinWindows: [PinWindowController] = []
+    private var sourceApplication: NSRunningApplication?
+    private var captureDelay: Task<Void, Never>?
     private var history = BoundedHistory<CaptureEntry>(capacity: 6)
     private init() {}
 
-    func startCapture() {
+    enum Mode { case region, fullScreen, activeWindow, repeatRegion, long }
+    func startCapture(mode: Mode = .region) {
         guard !isCapturing else { return }
+        sourceApplication = NSWorkspace.shared.frontmostApplication
+        let pointer = NSEvent.mouseLocation
         isCapturing = true
         Task {
             do {
@@ -31,11 +35,19 @@ final class CaptureController {
                 history.append(entry)
                 for shot in entry.shots {
                     guard let id = shot.screen.displayID, let session = entry.sessions[id] else { continue }
+                    switch mode {
+                    case .fullScreen: session.snapshot.selection = CGRect(origin: .zero, size: shot.screen.frame.size)
+                    case .activeWindow: session.snapshot.selection = shot.foregroundWindow
+                    case .repeatRegion: session.snapshot.selection = SettingsManager.lastRegion(displayID: id)?.intersection(CGRect(origin: .zero, size: shot.screen.frame.size))
+                    default: break
+                    }
                     let overlay = OverlayController(shot: shot, controller: self, session: session)
                     overlays.append(overlay)
                     overlay.show()
+                    if let rect = session.snapshot.selection { overlay.editor.setSelection(rect) }
                 }
-                updateHistoryStatus()
+                overlays.first { $0.screen.frame.contains(pointer) }?.window.makeKeyAndOrderFront(nil)
+                updateHistoryStatus(message: mode == .long ? "先框选滚动内容（避开固定页眉），再点工具条的长截图按钮" : nil)
                 NSApp.activate(ignoringOtherApps: true)
             } catch {
                 isCapturing = false
@@ -78,9 +90,13 @@ final class CaptureController {
         }
         overlays.removeAll()
         isCapturing = false
+        sourceApplication?.activate(options: [])
     }
     func cancel() { guard !isSaving else { return }; dismissOverlays() }
-    func copyToClipboard(_ image: NSImage) { Clipboard.copy(image: image); dismissOverlays() }
+    func copyToClipboard(_ image: NSImage) {
+        if SettingsManager.autoSave && !ImageFileSaver.quickSave(image, allowChoose: false) { return }
+        Clipboard.copy(image: image); dismissOverlays()
+    }
     func saveToFile(_ image: NSImage) {
         guard !isSaving else { return }
         isSaving = true
@@ -96,11 +112,8 @@ final class CaptureController {
         }
     }
     func pin(_ image: NSImage, at globalRect: CGRect) {
-        dismissOverlays()
-        let pin = PinWindowController(image: image, at: globalRect)
-        pinWindows.append(pin)
-        pin.onClose = { [weak self] controller in self?.pinWindows.removeAll { $0 === controller } }
-        pin.show()
+        if SettingsManager.autoSave && !ImageFileSaver.quickSave(image, allowChoose: false) { return }
+        if PinManager.shared.add(image, frame: globalRect) { dismissOverlays() }
     }
     func recognizeText(_ image: NSImage) {
         guard let data = image.pngData else {
@@ -109,5 +122,35 @@ final class CaptureController {
         }
         dismissOverlays()
         OCRResultController.present(pngData: data)
+    }
+    func startLongCapture(on screen: NSScreen, selection: CGRect) {
+        let app = sourceApplication
+        dismissOverlays(); isCapturing = true
+        app?.activate(options: [])
+        ScrollingCaptureController.start(screen: screen, selection: selection) { [weak self] in self?.isCapturing = false }
+    }
+    func delayedCapture(seconds: Int) {
+        captureDelay?.cancel()
+        captureDelay = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(seconds)) } catch { return }
+            self?.startCapture()
+        }
+    }
+    func cancelDelay() { captureDelay?.cancel(); captureDelay = nil }
+    func refreshCapture() {
+        guard isCapturing, !isSaving else { return }
+        Task {
+            do {
+                let shots = try await ScreenshotEngine.captureAllDisplays()
+                guard isCapturing else { return }
+                for overlay in overlays {
+                    if let shot = shots.first(where: { $0.screen.displayID == overlay.screen.displayID }), shot.screen.frame.size == overlay.editor.bounds.size {
+                        overlay.editor.replaceBackground(shot.image)
+                    }
+                }
+                history.current?.shots = shots
+                updateHistoryStatus(message: "背景已刷新，标注保留")
+            } catch { updateHistoryStatus(message: error.localizedDescription) }
+        }
     }
 }

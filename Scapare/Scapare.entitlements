@@ -2,8 +2,13 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <!-- Only explicit user-requested HTTPS image imports use network access. -->
+    <key>com.apple.security.network.client</key>
+    <true/>
     <!-- 沙盒下允许通过「保存」对话框将图片写入用户指定位置 -->
     <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+    <key>com.apple.security.files.bookmarks.app-scope</key>
     <true/>
 </dict>
 </plist>

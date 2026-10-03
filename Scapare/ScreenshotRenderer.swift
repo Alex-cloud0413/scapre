@@ -19,7 +19,7 @@ enum ScreenshotRenderer {
         context.translateBy(x: -rect.minX / sx, y: -(viewSize.height - rect.maxY / sy))
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
-        annotations.forEach { $0.draw() }
+        annotations.forEach { $0.draw(source: image, viewSize: viewSize) }
         NSGraphicsContext.restoreGraphicsState()
         return context.makeImage()
     }

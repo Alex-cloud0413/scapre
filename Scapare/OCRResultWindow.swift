@@ -11,23 +11,29 @@ final class OCRResultController: NSObject, NSWindowDelegate, NSTextViewDelegate 
     private let copyButton = NSButton(title: "复制", target: nil, action: nil)
     private let retryButton = NSButton(title: "重试", target: nil, action: nil)
     private let pngData: Data
+    private let barcode: Bool
     private var task: Task<Void, Never>?
     private var requestID = UUID()
     private var state: OCRState = .loading
 
-    static func present(pngData: Data) {
-        let controller = OCRResultController(pngData: pngData)
+    static func present(image: NSImage, barcode: Bool = false) {
+        guard let data = image.pngData else { AppDialogs.error("无法读取图片。"); return }
+        present(pngData: data, barcode: barcode)
+    }
+    static func present(pngData: Data, barcode: Bool = false) {
+        let controller = OCRResultController(pngData: pngData, barcode: barcode)
         alive.append(controller)
         NSApp.activate(ignoringOtherApps: true)
         controller.window.center()
         controller.window.makeKeyAndOrderFront(nil)
         controller.startRecognition()
     }
-    private init(pngData: Data) {
+    private init(pngData: Data, barcode: Bool) {
         self.pngData = pngData
+        self.barcode = barcode
         window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 480, height: 380),
                           styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
-        window.title = "文字识别 · Scapare"
+        window.title = barcode ? "条码识别 · Scapare" : "文字识别 · Scapare"
         window.minSize = NSSize(width: 340, height: 240)
         window.isReleasedWhenClosed = false
         super.init()
@@ -90,7 +96,7 @@ final class OCRResultController: NSObject, NSWindowDelegate, NSTextViewDelegate 
         render(.loading)
         task = Task { [weak self] in
             do {
-                let text = try await OCRService.recognize(pngData: data)
+                let text = try await (self?.barcode == true ? OCRService.barcodes(pngData: data) : OCRService.recognize(pngData: data))
                 guard !Task.isCancelled, self?.requestID == id else { return }
                 self?.render(.recognized(text))
             } catch {
@@ -109,9 +115,9 @@ final class OCRResultController: NSObject, NSWindowDelegate, NSTextViewDelegate 
         retryButton.isHidden = true
         progress.stopAnimation(nil)
         switch newState {
-        case .loading: statusLabel.stringValue = "正在识别文字…"; progress.startAnimation(nil)
+        case .loading: statusLabel.stringValue = barcode ? "正在识别条码…" : "正在识别文字…"; progress.startAnimation(nil)
         case .result: statusLabel.stringValue = "识别完成，可以编辑后复制。"
-        case .empty: statusLabel.stringValue = "未识别到文字，可以重试或重新截图。"; retryButton.isHidden = false
+        case .empty: statusLabel.stringValue = barcode ? "未发现条码，可以重试或重新截图。" : "未识别到文字，可以重试或重新截图。"; retryButton.isHidden = false
         case .failure(let message): statusLabel.stringValue = "识别失败：\(message)"; retryButton.isHidden = false
         }
     }

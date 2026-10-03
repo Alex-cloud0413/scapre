@@ -8,10 +8,6 @@
 
 import AppKit
 
-// 用于 hex 面板的 associated object keys
-private var hexPanelKey: UInt8 = 0
-private var hexTextFieldKey: UInt8 = 0
-
 @MainActor
 final class EditorToolbar: NSView {
     private weak var editor: EditorView?
@@ -19,23 +15,12 @@ final class EditorToolbar: NSView {
     private var hexColorButton: NSButton?
     private var fontSettingsButton: NSButton?
     private var fontPopover: NSPopover?
-    private let colorPopup = NSPopUpButton()
+    private let colorPopup = OpacityColorPopup()
     private var undoButton: NSButton?
     private var redoButton: NSButton?
-    private let colorNames = ["深红", "红色", "橙色", "黄色", "绿色", "蓝色", "紫色", "白色", "黑色"]
-
-    private let colors: [NSColor] = [
-        NSColor(red: 0.8, green: 0, blue: 0, alpha: 1.0),           // 深红 #CC0000（默认）
-        NSColor(red: 1.0, green: 0.23, blue: 0.19, alpha: 1.0),      // 红 #FF3B30
-        NSColor(red: 1.0, green: 0.58, blue: 0, alpha: 1.0),         // 橙 #FF9500
-        NSColor(red: 1.0, green: 0.8, blue: 0, alpha: 1.0),          // 黄 #FFCC00
-        NSColor(red: 0.2, green: 0.78, blue: 0.35, alpha: 1.0),      // 绿 #34C759
-        NSColor(red: 0, green: 0.48, blue: 1.0, alpha: 1.0),         // 蓝 #007AFF
-        NSColor(red: 0.69, green: 0.32, blue: 0.87, alpha: 1.0),     // 紫 #AF52DE
-        .white,
-        .black,
-    ]
-    private let widths: [CGFloat] = [2, 4, 8]
+    private let colors = AppearanceSettings.options.palette.compactMap(NSColor.init(hex:))
+    private var colorNames: [String] { colors.indices.map { "色板 \($0 + 1)" } }
+    private let widths: [CGFloat] = [1, 2, 4, 8, 12]
     private let fontWeights: [CGFloat] = [-0.6, 0, 0.4]      // thin, regular, bold
     private let fontSizes: [CGFloat] = [12, 14, 18, 24, 36, 48]
 
@@ -68,7 +53,7 @@ final class EditorToolbar: NSView {
         let stack = NSStackView()
         stack.orientation = .horizontal
         stack.alignment = .centerY
-        stack.spacing = 4
+        stack.spacing = AppearanceSettings.options.spaciousToolbar ? 8 : 4
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
 
@@ -86,11 +71,21 @@ final class EditorToolbar: NSView {
         addTool(to: stack, tool: .pen, symbol: "pencil.tip", tip: "画笔")
         addTool(to: stack, tool: .text, symbol: "textformat", tip: "文字")
 
+        let more = NSPopUpButton(frame: .zero, pullsDown: true)
+        more.addItem(withTitle: "更多工具")
+        for tool in AnnotationTool.allCases {
+            let item = NSMenuItem(title: tool.title, action: #selector(extraToolTapped(_:)), keyEquivalent: "")
+            item.target = self; item.representedObject = tool.rawValue; more.menu?.addItem(item)
+        }
+        more.menu?.addItem(.separator())
+        let style = NSMenuItem(title: "标注样式…", action: #selector(styleTapped), keyEquivalent: ""); style.target = self; more.menu?.addItem(style)
+        stack.addArrangedSubview(more)
         stack.addArrangedSubview(separator())
 
         // 颜色
         colorPopup.addItems(withTitles: zip(colorNames, colors).map { "\($0) #\($1.hexString)" })
         colorPopup.addItem(withTitle: "自定义颜色")
+        colorPopup.onScroll = { [weak self] delta in self?.editor?.adjustOpacity(delta) }
         colorPopup.target = self
         colorPopup.action = #selector(colorChanged(_:))
         colorPopup.setAccessibilityLabel("标注颜色")
@@ -103,7 +98,7 @@ final class EditorToolbar: NSView {
         stack.addArrangedSubview(separator())
 
         // 粗细
-        let seg = NSSegmentedControl(labels: ["细", "中", "粗"],
+        let seg = NSSegmentedControl(labels: ["1", "2", "4", "8", "12"],
                                      trackingMode: .selectOne,
                                      target: self, action: #selector(widthChanged(_:)))
         seg.selectedSegment = widths.firstIndex(of: editor?.strokeWidth ?? 2) ?? 0
@@ -145,7 +140,10 @@ final class EditorToolbar: NSView {
 
         stack.addArrangedSubview(separator())
 
-        // 主要操作（统一白色，简约风格）
+        if editor?.isLiveCapture == true {
+            stack.addArrangedSubview(actionButton(symbol: "arrow.down.to.line.compact", tip: "滚动长截图", action: #selector(longCaptureTapped)))
+        }
+        // 主要操作
         stack.addArrangedSubview(actionButton(symbol: "text.viewfinder", tip: "文字识别(OCR)", action: #selector(ocrTapped)))
         stack.addArrangedSubview(actionButton(symbol: "pin.fill", tip: "钉在屏幕上", action: #selector(pinTapped)))
         stack.addArrangedSubview(actionButton(symbol: "square.and.arrow.down", tip: "保存为图片（⌘S）", action: #selector(saveTapped)))
@@ -153,6 +151,11 @@ final class EditorToolbar: NSView {
         stack.addArrangedSubview(actionButton(symbol: "xmark", tip: "取消(Esc)", action: #selector(cancelTapped)))
 
         // 根据内容自动确定工具条大小。
+        func styleControls(_ view: NSView) {
+            if let control = view as? NSControl { control.font = .systemFont(ofSize: AppearanceSettings.options.controlsSize) }
+            view.subviews.forEach(styleControls)
+        }
+        styleControls(stack)
         layoutSubtreeIfNeeded()
         setFrameSize(fittingSize)
         refreshToolSelection()
@@ -262,7 +265,7 @@ final class EditorToolbar: NSView {
             button.state = active ? .on : .off
             button.setAccessibilityValue(active ? "已选择" : "未选择")
             button.layer?.borderWidth = active ? 2 : 0
-            button.layer?.borderColor = NSColor.labelColor.cgColor
+            button.layer?.borderColor = AppearanceSettings.accent.cgColor
         }
         if let color = editor?.strokeColor, colorPopup.numberOfItems > 0 {
             if let index = colors.firstIndex(where: { $0.hexString == color.hexString }) {
@@ -282,6 +285,11 @@ final class EditorToolbar: NSView {
 
     // MARK: - 动作
 
+    @objc private func extraToolTapped(_ sender: NSMenuItem) {
+        if let raw = sender.representedObject as? String, let tool = AnnotationTool(rawValue: raw) { editor?.selectTool(tool) }
+    }
+    @objc private func styleTapped() { editor?.showStyleOptions() }
+    @objc private func longCaptureTapped() { editor?.actionLongCapture() }
     @objc private func toolTapped(_ sender: NSButton) {
         let tool = toolButtons[sender.tag].tool
         editor?.selectTool(tool)
@@ -370,82 +378,13 @@ final class EditorToolbar: NSView {
     }
 
     private func presentHexColorPanel() {
-        guard let editor = editor, let editorWindow = editor.window else { return }
-
-        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 260, height: 100),
-                            styleMask: [.titled, .closable],
-                            backing: .buffered,
-                            defer: false)
-        panel.title = "自定义颜色"
-        panel.level = NSWindow.Level(rawValue: Int(CGShieldingWindowLevel()) + 1)
-        panel.isReleasedWhenClosed = false
-
-        let textField = NSTextField(frame: NSRect(x: 16, y: 52, width: 228, height: 24))
-        textField.placeholderString = "CC0000"
-        if let savedHex = SettingsManager.customColorHex {
-            textField.stringValue = savedHex
-        }
-        panel.contentView?.addSubview(textField)
-
-        let hint = NSTextField(labelWithString: "输入十六进制颜色值（如 CC0000 或 #FF00FF）")
-        hint.font = NSFont.systemFont(ofSize: 10)
-        hint.textColor = .secondaryLabelColor
-        hint.frame = NSRect(x: 16, y: 32, width: 228, height: 14)
-        panel.contentView?.addSubview(hint)
-
-        let okButton = NSButton(frame: NSRect(x: 164, y: 8, width: 80, height: 22))
-        okButton.title = "确定"
-        okButton.bezelStyle = .rounded
-        okButton.keyEquivalent = "\r"
-
-        let cancelButton = NSButton(frame: NSRect(x: 80, y: 8, width: 80, height: 22))
-        cancelButton.title = "取消"
-        cancelButton.bezelStyle = .rounded
-
-        panel.contentView?.addSubview(okButton)
-        panel.contentView?.addSubview(cancelButton)
-
-        // 定位到 editorWindow 中央
-        let editorFrame = editorWindow.frame
-        let panelOrigin = CGPoint(x: editorFrame.midX - 130, y: editorFrame.midY - 50)
-        panel.setFrameOrigin(panelOrigin)
-
-        okButton.target = self
-        okButton.action = #selector(hexPanelOKTapped(_:))
-        cancelButton.target = self
-        cancelButton.action = #selector(hexPanelCancelTapped(_:))
-
-        // 把 panel 和 textField 关联起来以便回调中获取
-        objc_setAssociatedObject(okButton, &hexPanelKey, panel, .OBJC_ASSOCIATION_ASSIGN)
-        objc_setAssociatedObject(okButton, &hexTextFieldKey, textField, .OBJC_ASSOCIATION_ASSIGN)
-        objc_setAssociatedObject(cancelButton, &hexPanelKey, panel, .OBJC_ASSOCIATION_ASSIGN)
-
-        NSApp.activate(ignoringOtherApps: true)
-        panel.makeKeyAndOrderFront(nil)
+        guard let values = AppDialogs.fields(title: "自定义颜色", labels: ["六位色值 #"], values: [editor?.strokeColor.hexString ?? "CC0000"]) else { return }
+        guard let color = NSColor(hex: values[0]) else { AppDialogs.error("请输入六位十六进制色值，例如 CC0000。"); return }
+        SettingsManager.customColorHex = color.hexString; editor?.setColor(color); refreshHexColorButton()
     }
+}
 
-    @objc private func hexPanelOKTapped(_ sender: NSButton) {
-        guard let panel = objc_getAssociatedObject(sender, &hexPanelKey) as? NSPanel,
-              let textField = objc_getAssociatedObject(sender, &hexTextFieldKey) as? NSTextField else { return }
-        let input = textField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        let hex = input.hasPrefix("#") ? String(input.dropFirst()) : input
-        guard hex.count == 6, let _ = UInt32(hex, radix: 16),
-              let color = NSColor(hex: hex) else {
-            let err = NSAlert()
-            err.messageText = "无效的颜色值"
-            err.informativeText = "请输入六位十六进制值，如 CC0000 或 #FF00FF"
-            err.addButton(withTitle: "好的")
-            err.beginSheetModal(for: panel)
-            return
-        }
-        SettingsManager.customColorHex = hex
-        editor?.setColor(color)
-        refreshHexColorButton()
-        panel.close()
-    }
-
-    @objc private func hexPanelCancelTapped(_ sender: NSButton) {
-        guard let panel = objc_getAssociatedObject(sender, &hexPanelKey) as? NSPanel else { return }
-        panel.close()
-    }
+private final class OpacityColorPopup: NSPopUpButton {
+    var onScroll: ((CGFloat) -> Void)?
+    override func scrollWheel(with event: NSEvent) { onScroll?(event.scrollingDeltaY > 0 ? 0.05 : -0.05) }
 }

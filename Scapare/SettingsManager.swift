@@ -88,6 +88,7 @@ enum SettingsManager {
 
     /// 键码 → 显示名称（覆盖常用键）
     static func keyDisplayName(_ keyCode: UInt32) -> String {
+        if keyCode == UInt32.max { return "未设置" }
         switch Int(keyCode) {
         case 0x00: return "A"; case 0x01: return "S"; case 0x02: return "D"
         case 0x03: return "F"; case 0x04: return "H"; case 0x05: return "G"
@@ -141,5 +142,28 @@ enum SettingsManager {
         if f.contains(.option)  { mods |= UInt32(optionKey) }
         if f.contains(.control) { mods |= UInt32(controlKey) }
         return (UInt32(event.keyCode), mods)
+    }
+}
+
+extension SettingsManager {
+    static var captureCursor: Bool {
+        get { UserDefaults.standard.bool(forKey: "capture_cursor") }
+        set { UserDefaults.standard.set(newValue, forKey: "capture_cursor") }
+    }
+    static var restorePins: Bool {
+        get { UserDefaults.standard.object(forKey: "restore_pins") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "restore_pins") }
+    }
+    static var autoSave: Bool {
+        get { UserDefaults.standard.bool(forKey: "auto_save") }
+        set { UserDefaults.standard.set(newValue, forKey: "auto_save") }
+    }
+    static func rememberRegion(_ rect: CGRect, displayID: UInt32) {
+        UserDefaults.standard.set(["x": rect.minX, "y": rect.minY, "w": rect.width, "h": rect.height, "display": Double(displayID)], forKey: "last_region")
+    }
+    static func lastRegion(displayID: UInt32) -> CGRect? {
+        guard let v = UserDefaults.standard.dictionary(forKey: "last_region") as? [String: Double], v["display"] == Double(displayID),
+              let x = v["x"], let y = v["y"], let w = v["w"], let h = v["h"], [x,y,w,h].allSatisfy(\.isFinite), w > 0, h > 0 else { return nil }
+        return CGRect(x: x, y: y, width: w, height: h)
     }
 }

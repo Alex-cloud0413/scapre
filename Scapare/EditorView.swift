@@ -13,11 +13,30 @@
 
 import AppKit
 
+enum EditorOutput { case copy, save, pin, ocr, barcode, share, quickSave }
+
 @MainActor
 final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
 
     // MARK: - 数据
 
+    var onOutput: ((EditorOutput, NSImage) -> Void)?
+    var onCancel: (() -> Void)?
+    var isLiveCapture = true
+    private var externalToolbar = false
+    private var raster: PixelRaster?
+    private var hoverPoint: CGPoint?
+    private var hoverWindow: CGRect?
+    private var elementCandidates: [CGRect] = []
+    private var lastElementQuery = Date.distantPast
+    private var elementIndex = 0
+    private var decoration = ImageDecoration()
+    private var showMagnifier = AppearanceSettings.options.magnifierVisible
+    private var fixedRatio: CGFloat?
+    private var annotationStyle = Annotation(tool: .rectangle, color: .red, lineWidth: 2)
+    private var selectedIndices: Set<Int> = []
+    private var textReplacement: (snapshot: EditSnapshot, index: Int)?
+    var editingSnapshot: EditSnapshot { finishTextEditing(); return session.snapshot }
     private var shot: DisplayShot
     private weak var controller: CaptureController?
     private var displayImage: NSImage
@@ -44,10 +63,11 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
     private(set) var activeTool: AnnotationTool?
     private(set) var strokeColor: NSColor = SettingsManager.defaultStrokeColor
     private(set) var strokeWidth: CGFloat = 2
-    private(set) var textFontSize: CGFloat = 14
+    private(set) var textFontSize: CGFloat = AppearanceSettings.options.fontSize
     private(set) var textFontWeight: CGFloat = 0  // regular
 
     private var toolbar: EditorToolbar?
+    private var toolbarScroll: NSScrollView?
     private var textView: NSTextView?
     private var textScrollView: NSScrollView?
 
@@ -69,12 +89,13 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
 
     // MARK: - 初始化
 
-    init(shot: DisplayShot, controller: CaptureController, session: EditingSession) {
+    init(shot: DisplayShot, controller: CaptureController, session: EditingSession, canvasSize: CGSize? = nil) {
         self.session = session
         self.shot = shot
         self.controller = controller
-        self.displayImage = NSImage(cgImage: shot.image, size: shot.screen.frame.size)
-        super.init(frame: CGRect(origin: .zero, size: shot.screen.frame.size))
+        self.displayImage = NSImage(cgImage: shot.image, size: canvasSize ?? shot.screen.frame.size)
+        self.raster = try? PixelRaster(shot.image)
+        super.init(frame: CGRect(origin: .zero, size: canvasSize ?? shot.screen.frame.size))
         wantsLayer = true
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
@@ -94,6 +115,7 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
         session = newSession
         shot = newShot
         displayImage = NSImage(cgImage: newShot.image, size: newShot.screen.frame.size)
+        raster = try? PixelRaster(newShot.image)
         currentAnnotation = nil
         selectedAnnotationIndex = nil
         interactionStart = nil
@@ -110,6 +132,7 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
     }
     private func refreshSessionView() {
         selectedAnnotationIndex = nil
+        selectedIndices.removeAll()
         if selection != nil { showToolbar() } else { hideToolbar() }
         toolbar?.refreshToolSelection()
         layoutToolbar()
@@ -162,7 +185,7 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
             addCursorRect(rect.insetBy(dx: -4, dy: -4).intersection(bounds), cursor: cursor)
         }
         if let i = selectedAnnotationIndex, annotations.indices.contains(i) {
-            addCursorRect(PixelGeometry.textHandle(for: annotations[i].textBoundingRect()).intersection(bounds), cursor: .crosshair)
+            addCursorRect(PixelGeometry.textHandle(for: annotations[i].tool == .text ? annotations[i].textBoundingRect() : annotations[i].boundingRect).intersection(bounds), cursor: .crosshair)
         }
     }
 
@@ -181,24 +204,31 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
         }
         mask.fill()
 
+        if selection == nil, let hoverWindow {
+            AppearanceSettings.accent.setStroke()
+            let outline = NSBezierPath(rect: hoverWindow); outline.lineWidth = 2; outline.stroke()
+        }
+        if showMagnifier, let point = hoverPoint, activeTool == nil, textView == nil { drawMagnifier(at: point) }
         guard let sel = selection else { return }
 
         // 3. 选区里的标注(裁剪到选区内)。
         NSGraphicsContext.saveGraphicsState()
         NSBezierPath(rect: sel).addClip()
-        for ann in annotations { ann.draw() }
-        currentAnnotation?.draw()
+        for ann in annotations { ann.draw(source: shot.image, viewSize: bounds.size) }
+        if let currentAnnotation, [.mosaic, .blur].contains(currentAnnotation.tool) {
+            NSColor.black.setFill(); NSBezierPath(rect: currentAnnotation.normalizedRect).fill()
+        } else { currentAnnotation?.draw(source: shot.image, viewSize: bounds.size) }
         NSGraphicsContext.restoreGraphicsState()
 
         // 4. 选区边框。
-        NSColor.systemBlue.setStroke()
+        AppearanceSettings.accent.setStroke()
         let border = NSBezierPath(rect: sel)
         border.lineWidth = 1.5
         border.stroke()
         if activeTool == nil {
             for (_, rect) in handleRects(for: sel) {
                 NSColor.white.setFill()
-                NSColor.systemBlue.setStroke()
+                AppearanceSettings.accent.setStroke()
                 let handle = NSBezierPath(roundedRect: rect, xRadius: 2, yRadius: 2)
                 handle.fill()
                 handle.lineWidth = 1.5
@@ -206,18 +236,21 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
             }
         }
 
+        for i in selectedIndices where annotations.indices.contains(i) && i != selectedAnnotationIndex {
+            AppearanceSettings.accent.setStroke(); NSBezierPath(rect: annotations[i].boundingRect).stroke()
+        }
         // 5. 选中的文字标注：画高亮边框和缩放把手。
         if let idx = selectedAnnotationIndex, idx < annotations.count {
             let ann = annotations[idx]
-            let br = ann.textBoundingRect()
-            NSColor.systemBlue.withAlphaComponent(0.5).setStroke()
+            let br = ann.tool == .text ? ann.textBoundingRect() : ann.boundingRect
+            AppearanceSettings.accent.withAlphaComponent(0.5).setStroke()
             let highlight = NSBezierPath(rect: br.insetBy(dx: -3, dy: -3))
             highlight.lineWidth = 1.5
             highlight.setLineDash([4, 3], count: 2, phase: 0)
             highlight.stroke()
             // 右下角缩放三角把手
             let handleRect = PixelGeometry.textHandle(for: br)
-            NSColor.systemBlue.setFill()
+            AppearanceSettings.accent.setFill()
             let handlePath = NSBezierPath(ovalIn: handleRect)
             handlePath.fill()
         }
@@ -225,7 +258,7 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
         // 6. 尺寸标签。
         let pixelRect = PixelGeometry.cropRect(selection: sel, viewSize: bounds.size,
                                                imageSize: CGSize(width: shot.image.width, height: shot.image.height))
-        let label = "\(Int(pixelRect.width)) × \(Int(pixelRect.height)) px"
+        let label = UserDefaults.standard.bool(forKey: "selection_in_points") ? "\(Int(sel.width)) × \(Int(sel.height)) pt · \(Int(pixelRect.width)) × \(Int(pixelRect.height)) px" : "\(Int(pixelRect.width)) × \(Int(pixelRect.height)) px"
         let attrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 12, weight: .medium),
             .foregroundColor: NSColor.white
@@ -277,6 +310,20 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
         annotationDrag = .none
 
         if let tool = activeTool {
+            if tool == .number, selection?.contains(p) == true {
+                var ann = makeAnnotation(tool); ann.start = p
+                ann.number = (annotations.filter { $0.tool == .number }.map(\.number).max() ?? 0) + 1
+                annotations.append(ann)
+                if let old = interactionStart { session.commit(from: old) }
+                interactionStart = nil; dragMode = .none; return
+            }
+            if tool == .polyline, selection?.contains(p) == true {
+                if currentAnnotation == nil { currentAnnotation = makeAnnotation(tool); currentAnnotation?.start = p }
+                currentAnnotation?.points.append(p); currentAnnotation?.end = p
+                interactionStart = nil
+                if event.clickCount == 2 { finishPolyline() }
+                dragMode = .none; needsDisplay = true; return
+            }
             // 标注模式
             if tool == .text {
                 if selection?.contains(p) ?? false {
@@ -287,10 +334,10 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
             }
             guard selection?.contains(p) ?? false else { dragMode = .none; return }
             selectedAnnotationIndex = nil
-            var ann = Annotation(tool: tool, color: strokeColor, lineWidth: strokeWidth)
+            var ann = makeAnnotation(tool)
             ann.start = p
             ann.end = p
-            if tool == .pen { ann.points = [p] }
+            if tool == .pen || tool == .highlighter { ann.points = [p] }
             currentAnnotation = ann
             dragMode = .annotating
             return
@@ -299,14 +346,14 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
         // 选区模式：先检查是否点击到已有的文字标注
         if let sel = selection {
             if let i = selectedAnnotationIndex, annotations.indices.contains(i),
-               PixelGeometry.textHandle(for: annotations[i].textBoundingRect()).insetBy(dx: -4, dy: -4).contains(p) {
+               PixelGeometry.textHandle(for: annotations[i].tool == .text ? annotations[i].textBoundingRect() : annotations[i].boundingRect).insetBy(dx: -4, dy: -4).contains(p) {
                 annotationDrag = .resizingText
                 dragMode = .none
                 return
             }
             var hitTextIndex: Int? = nil
-            for i in annotations.indices.reversed() where annotations[i].tool == .text {
-                let br = annotations[i].textBoundingRect()
+            for i in annotations.indices.reversed() {
+                let br = annotations[i].boundingRect
                 if br.contains(p) {
                     hitTextIndex = i
                     break
@@ -315,7 +362,12 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
 
             if let idx = hitTextIndex {
                 // 点击到文字标注：选中它
+                if event.modifierFlags.contains(.shift) { selectedIndices.formSymmetricDifference([idx]) }
+                else if !selectedIndices.contains(idx) { selectedIndices = [idx] }
                 selectedAnnotationIndex = idx
+                if event.clickCount == 2, annotations[idx].tool == .text {
+                    editTextAnnotation(at: idx); interactionStart = nil; dragMode = .none; return
+                }
                 annotationDrag = .movingText
                 dragMode = .none
                 needsDisplay = true
@@ -324,6 +376,7 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
 
             // 没有点中文字标注，取消选中
             selectedAnnotationIndex = nil
+            selectedIndices.removeAll()
 
             if let h = handleHit(at: p, in: sel) {
                 dragMode = .resizing(h)
@@ -348,7 +401,9 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
 
         switch dragMode {
         case .creating:
-            selection = rect(from: dragStart, to: p)
+            var proposed = rect(from: dragStart, to: p)
+            if let ratio = fixedRatio { proposed.size.height = proposed.width / ratio }
+            selection = proposed.intersection(bounds)
 
         case .moving:
             var newRect = selectionAtDragStart
@@ -360,7 +415,7 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
             selection = resized(selectionAtDragStart, handle: h, to: p)
 
         case .annotating:
-            if currentAnnotation?.tool == .pen {
+            if currentAnnotation?.tool == .pen || currentAnnotation?.tool == .highlighter {
                 currentAnnotation?.points.append(clampIntoSelection(p))
             } else {
                 currentAnnotation?.end = clampIntoSelection(p)
@@ -376,15 +431,19 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
             guard let idx = selectedAnnotationIndex, idx < annotations.count else { break }
             let dx = p.x - dragStart.x
             let dy = p.y - dragStart.y
-            annotations[idx].start.x += dx
-            annotations[idx].start.y += dy
+            let indices = selectedIndices.isEmpty ? Set([idx]) : selectedIndices
+            for i in indices where annotations.indices.contains(i) { annotations[i].translate(x: dx, y: dy) }
             dragStart = p
         case .resizingText:
             guard let idx = selectedAnnotationIndex, idx < annotations.count else { break }
             let dy = p.y - dragStart.y
             var newSize = annotations[idx].fontSize + ((p.x - dragStart.x) - dy) * 0.3
             newSize = min(max(newSize, 10), 200)
-            annotations[idx].fontSize = newSize
+            if annotations[idx].tool == .text { annotations[idx].fontSize = newSize }
+            else {
+                let b = annotations[idx].boundingRect
+                annotations[idx].scale(by: max(0.1, 1 + ((p.x - dragStart.x) - dy) / max(20, b.width + b.height)), around: CGPoint(x: b.minX, y: b.maxY))
+            }
             dragStart = p
         case .none:
             break
@@ -398,8 +457,8 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
         switch dragMode {
         case .creating:
             if let sel = selection, sel.width < 3 || sel.height < 3 {
-                selection = nil
-                hideToolbar()
+                selection = hoverWindow
+                if selection != nil { showToolbar() } else { hideToolbar() }
             } else {
                 showToolbar()
             }
@@ -417,8 +476,10 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
         annotationDrag = .none
         // Preserve the active text selection when registering the undo action.
         let selected = selectedAnnotationIndex
+        let selectedSet = selectedIndices
         if let previous = interactionStart { session.commit(from: previous) }
         selectedAnnotationIndex = selected
+        selectedIndices = selectedSet
         interactionStart = nil
         window?.invalidateCursorRects(for: self)
         needsDisplay = true
@@ -426,11 +487,30 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
 
     override func mouseMoved(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
+        hoverPoint = p
+        if currentAnnotation?.tool == .polyline { currentAnnotation?.end = clampIntoSelection(p) }
+        if selection == nil, isLiveCapture {
+            if let pid = shot.sourcePID, ElementPicker.enabled, Date().timeIntervalSince(lastElementQuery) > 0.12 {
+                let global = CGPoint(x: shot.screen.frame.minX + p.x, y: shot.screen.frame.minY + p.y)
+                elementCandidates = ElementPicker.frames(at: global, processID: pid).map { $0.offsetBy(dx: -shot.screen.frame.minX, dy: -shot.screen.frame.minY).intersection(bounds) }.filter { !$0.isNull }
+                lastElementQuery = Date(); elementIndex = 0
+            }
+            hoverWindow = elementCandidates.first ?? shot.windows.first(where: { $0.contains(p) })
+        }
         updateRGBLabel(at: p)
+        needsDisplay = true
     }
 
+    override func scrollWheel(with event: NSEvent) {
+        if selection == nil, !elementCandidates.isEmpty {
+            elementIndex = max(0, min(elementCandidates.count - 1, elementIndex + (event.scrollingDeltaY < 0 ? 1 : -1)))
+            hoverWindow = elementCandidates[elementIndex]; needsDisplay = true
+        } else { super.scrollWheel(with: event) }
+    }
     override func mouseExited(with event: NSEvent) {
         hideRGBLabel()
+        hoverPoint = nil
+        needsDisplay = true
     }
 
     override func keyDown(with event: NSEvent) {
@@ -450,9 +530,19 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
 
         switch event.keyCode {
         case 53: // Esc
-            controller?.cancel()
+            if currentAnnotation?.tool == .polyline { currentAnnotation = nil; needsDisplay = true }
+            else { actionCancel() }
         case 36, 76: // Return / Enter
-            actionCopy()
+            if currentAnnotation?.tool == .polyline { finishPolyline() } else { actionCopy() }
+        case 123, 124, 125, 126: nudge(with: event)
+        case 8: copyColor()
+        case 9:
+            if let sel = selection {
+                let r = PixelGeometry.cropRect(selection: sel, viewSize: bounds.size, imageSize: CGSize(width: shot.image.width, height: shot.image.height))
+                Clipboard.copy(text: "\(Int(r.width)) × \(Int(r.height)) px")
+            }
+        case 49 where selection == nil:
+            if let hoverWindow { selection = hoverWindow; showToolbar(); needsDisplay = true }
         case 43: // 逗号 , ：回到上一张截图历史
             controller?.navigateHistory(delta: -1)
         case 47: // 句号 . ：前往下一张截图历史
@@ -460,7 +550,8 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
         case 51, 117: // Delete / Backspace：删除选中的文字标注
             if let idx = selectedAnnotationIndex, idx < annotations.count {
                 let previous = session.snapshot
-                annotations.remove(at: idx)
+                let indices = selectedIndices.isEmpty ? Set([idx]) : selectedIndices
+                annotations = annotations.enumerated().filter { !indices.contains($0.offset) }.map(\.element)
                 session.commit(from: previous)
                 selectedAnnotationIndex = nil
                 needsDisplay = true
@@ -484,6 +575,8 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
         let shifted = flags.contains(.shift)
         switch event.keyCode {
         case 6: shifted ? redo() : undo()
+        case 8 where shifted: copyAnnotations()
+        case 9 where shifted: pasteAnnotations()
         case 8 where !shifted: actionCopy()
         case 1 where !shifted: actionSave()
         case 0 where !shifted:
@@ -517,10 +610,25 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
         add("文字识别", #selector(ocrCommand), "o", shift: true)
         add("贴图", #selector(pinCommand), "p", shift: true)
         menu.addItem(.separator())
-        for (index, title) in ["矩形", "椭圆", "箭头", "画笔", "文字"].enumerated() {
-            let item = menu.addItem(withTitle: title, action: #selector(toolCommand(_:)), keyEquivalent: "")
-            item.tag = index; item.target = self
+        let toolsItem = NSMenuItem(title: "标注工具", action: nil, keyEquivalent: ""), toolsMenu = NSMenu()
+        for (index, tool) in AnnotationTool.allCases.enumerated() {
+            let item = toolsMenu.addItem(withTitle: tool.title, action: #selector(toolCommand(_:)), keyEquivalent: "")
+            item.tag = index; item.target = self; item.state = activeTool == tool ? .on : .off
         }
+        toolsItem.submenu = toolsMenu; menu.addItem(toolsItem)
+        menu.addItem(.separator())
+        add("标注样式…", #selector(styleCommand))
+        add("精确选区尺寸…", #selector(sizeCommand))
+        add("固定宽高比…", #selector(ratioCommand))
+        add("复制光标处颜色（C）", #selector(colorCommand))
+        add("切换选区单位（像素 / 点）", #selector(unitCommand))
+        add("显示/隐藏放大镜", #selector(magnifierCommand))
+        add("快速保存", #selector(quickSaveCommand))
+        add("复制图片为文件", #selector(copyFileCommand))
+        add("圆角 / 边框 / 阴影导出…", #selector(decorationCommand))
+        add("分享…", #selector(shareCommand))
+        add("识别条码 / 二维码", #selector(barcodeCommand))
+        if isLiveCapture { add("滚动长截图…", #selector(longCaptureCommand)); add("刷新背景", #selector(refreshCommand)) }
         add("上一张历史截图（,）", #selector(previousHistory))
         add("下一张历史截图（.）", #selector(nextHistory))
         add("取消截图（Esc）", #selector(cancelCommand))
@@ -551,7 +659,7 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
         }
     }
     @objc private func toolCommand(_ item: NSMenuItem) {
-        selectTool([.rectangle, .ellipse, .arrow, .pen, .text][item.tag])
+        selectTool(AnnotationTool.allCases[item.tag])
     }
 
     // MARK: - 几何辅助
@@ -598,7 +706,8 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
 
     private func isMeaningful(_ ann: Annotation) -> Bool {
         switch ann.tool {
-        case .pen: return ann.points.count > 1
+        case .pen, .polyline, .highlighter: return ann.points.count > 1
+        case .number: return true
         case .text: return !ann.text.isEmpty
         default: return abs(ann.end.x - ann.start.x) > 2 || abs(ann.end.y - ann.start.y) > 2
         }
@@ -609,7 +718,14 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
     func selectTool(_ tool: AnnotationTool) {
         finishTextEditing()
         selectedAnnotationIndex = nil
+        selectedIndices.removeAll()
+        if currentAnnotation?.tool == .polyline { finishPolyline() }
+        if let activeTool { AppearanceSettings.remember(makeAnnotation(activeTool)) }
         activeTool = (activeTool == tool) ? nil : tool
+        if activeTool != nil {
+            if let saved = AppearanceSettings.style(for: tool) { annotationStyle = saved; strokeColor = saved.color; strokeWidth = saved.lineWidth; textFontSize = saved.fontSize; textFontWeight = saved.fontWeight }
+            else { annotationStyle = Annotation(tool: tool, color: strokeColor, lineWidth: strokeWidth); annotationStyle.fontName = AppearanceSettings.options.fontName }
+        }
         toolbar?.refreshToolSelection()
         layoutToolbar()
         window?.invalidateCursorRects(for: self)
@@ -618,23 +734,30 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
 
     func setColor(_ color: NSColor) {
         strokeColor = color
+        if let activeTool { AppearanceSettings.remember(makeAnnotation(activeTool)) }
         textView?.textColor = color
         toolbar?.refreshToolSelection()
         layoutToolbar()
     }
 
+    func adjustOpacity(_ delta: CGFloat) {
+        annotationStyle.opacity = max(0.05, min(1, annotationStyle.opacity + delta))
+        if let activeTool { AppearanceSettings.remember(makeAnnotation(activeTool)) }
+        setHistoryStatus("标注不透明度 \(Int(annotationStyle.opacity * 100))%")
+    }
     func setWidth(_ width: CGFloat) {
         strokeWidth = width
+        if let activeTool { AppearanceSettings.remember(makeAnnotation(activeTool)) }
     }
 
     func setTextFontSize(_ size: CGFloat) {
         textFontSize = size
-        textView?.font = NSFont.systemFont(ofSize: size, weight: NSFont.Weight(textFontWeight))
+        textView?.font = AppearanceSettings.font(size: size, weight: textFontWeight, name: annotationStyle.fontName)
     }
 
     func setTextFontWeight(_ weight: CGFloat) {
         textFontWeight = weight
-        textView?.font = NSFont.systemFont(ofSize: textFontSize, weight: NSFont.Weight(weight))
+        textView?.font = AppearanceSettings.font(size: textFontSize, weight: weight, name: annotationStyle.fontName)
     }
 
     func undo() {
@@ -648,16 +771,18 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
         toolbar?.refreshToolSelection()
     }
 
-    func actionCancel() { controller?.cancel() }
+    func actionCancel() { if let onCancel { onCancel() } else { controller?.cancel() } }
 
     func actionCopy() {
         guard let image = renderResult() else { return }
-        controller?.copyToClipboard(image)
+        rememberRegion()
+        if let onOutput { onOutput(.copy, image) } else { controller?.copyToClipboard(image) }
     }
 
     func actionSave() {
         guard let image = renderResult() else { return }
-        controller?.saveToFile(image)
+        rememberRegion()
+        if let onOutput { onOutput(.save, image) } else { controller?.saveToFile(image) }
     }
 
     func actionPin() {
@@ -665,12 +790,13 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
         let global = CGRect(x: shot.screen.frame.minX + sel.minX,
                             y: shot.screen.frame.minY + sel.minY,
                             width: sel.width, height: sel.height)
-        controller?.pin(image, at: global)
+        rememberRegion()
+        if let onOutput { onOutput(.pin, image) } else { controller?.pin(image, at: global) }
     }
 
     func actionOCR() {
         guard let image = renderResult() else { return }
-        controller?.recognizeText(image)
+        if let onOutput { onOutput(.ocr, image) } else { controller?.recognizeText(image) }
     }
 
     // MARK: - 文字输入
@@ -682,13 +808,13 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
         let availableWidth: CGFloat = sel.maxX - point.x
         let availableHeight: CGFloat = point.y - sel.minY
 
-        let initialWidth: CGFloat = max(200, availableWidth)
-        let initialHeight: CGFloat = 40
+        let initialWidth: CGFloat = max(20, availableWidth)
+        let initialHeight: CGFloat = max(20, min(40, availableHeight))
         let frame = CGRect(x: point.x, y: point.y - initialHeight,
                            width: initialWidth, height: initialHeight)
 
         let scroll = NSScrollView(frame: frame)
-        scroll.hasVerticalScroller = false
+        scroll.hasVerticalScroller = true
         scroll.hasHorizontalScroller = false
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
@@ -697,7 +823,7 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
         textScrollView = scroll
 
         let tv = NSTextView(frame: NSRect(origin: .zero, size: frame.size))
-        tv.font = NSFont.systemFont(ofSize: textFontSize, weight: NSFont.Weight(textFontWeight))
+        tv.font = AppearanceSettings.font(size: textFontSize, weight: textFontWeight, name: annotationStyle.fontName)
         tv.textColor = strokeColor
         tv.backgroundColor = .clear
         tv.drawsBackground = false
@@ -706,15 +832,16 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
         tv.isRichText = false
         tv.allowsUndo = true
         textUndoManager.removeAllActions()
-        tv.isHorizontallyResizable = true
+        tv.isHorizontallyResizable = false
         tv.isVerticallyResizable = true
-        tv.minSize = NSSize(width: 80, height: 20)
-        tv.maxSize = NSSize(width: max(availableWidth, 10000), height: max(availableHeight, 10000))
+        tv.minSize = NSSize(width: initialWidth, height: 20)
+        tv.maxSize = NSSize(width: initialWidth, height: 30000)
+        tv.textContainerInset = .zero
         tv.autoresizingMask = []
         tv.textContainer?.lineFragmentPadding = 0
-        tv.textContainer?.widthTracksTextView = false
+        tv.textContainer?.widthTracksTextView = true
         tv.textContainer?.heightTracksTextView = false
-        tv.textContainer?.containerSize = NSSize(width: max(availableWidth, 10000), height: max(availableHeight, 10000))
+        tv.textContainer?.containerSize = NSSize(width: initialWidth, height: 30000)
         tv.delegate = self
         scroll.documentView = tv
 
@@ -726,47 +853,45 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
     func textDidChange(_ notification: Notification) {
         guard let tv = textView, let scroll = textScrollView else { return }
         let ideal = tv.layoutManager?.usedRect(for: tv.textContainer!) ?? .zero
-        let padding: CGFloat = 12
-        let newTextSize = NSSize(
-            width: max(ideal.width + padding, 80),
-            height: max(ideal.height + padding, 30)
-        )
-        tv.setFrameSize(newTextSize)
-        var newOrigin = scroll.frame.origin
-        let oldHeight = scroll.frame.height
-        scroll.setFrameSize(newTextSize)
-        if newTextSize.height != oldHeight {
-            newOrigin.y -= newTextSize.height - oldHeight
-            scroll.setFrameOrigin(newOrigin)
-        }
+        let top = scroll.frame.maxY
+        let contentHeight = max(30, ideal.height)
+        tv.setFrameSize(CGSize(width: scroll.frame.width, height: contentHeight))
+        let visibleHeight = min(contentHeight, max(20, top - (selection?.minY ?? 0)))
+        scroll.frame = CGRect(x: scroll.frame.minX, y: top - visibleHeight, width: scroll.frame.width, height: visibleHeight)
     }
 
     private func finishTextEditing() {
         guard let tv = textView, let scroll = textScrollView else { return }
         let str = tv.string
         let origin = scroll.frame.origin
+        let replacement = textReplacement
+        textReplacement = nil
         textView = nil
         textScrollView = nil
         scroll.removeFromSuperview()
         if !str.isEmpty {
-            let previous = session.snapshot
-            var ann = Annotation(tool: .text, color: strokeColor, lineWidth: strokeWidth)
+            let previous = replacement?.snapshot ?? session.snapshot
+            var ann = makeAnnotation(.text)
             ann.text = str
-            ann.start = CGPoint(x: origin.x, y: origin.y + 4)
+            ann.start = CGPoint(x: origin.x, y: origin.y)
             ann.fontSize = textFontSize
             ann.fontWeight = textFontWeight
-            ann.textMaxWidth = scroll.frame.width   // 记录编辑框宽度用于多行换行
-            annotations.append(ann)
+            ann.textMaxWidth = scroll.frame.width
+            ann.start.y = scroll.frame.maxY - ann.textBoundingRect().height
+            if let replacement { annotations.insert(ann, at: min(replacement.index, annotations.count)) }
+            else { annotations.append(ann) }
             session.commit(from: previous)
             // 自动选中刚创建的文字标注，方便用户直接拖动调整
             selectedAnnotationIndex = annotations.count - 1
             needsDisplay = true
         }
+        if str.isEmpty, let replacement { session.commit(from: replacement.snapshot) }
         window?.makeFirstResponder(self)
     }
 
     private func cancelTextEditing() {
         guard let scroll = textScrollView else { return }
+        if let replacement = textReplacement { session.snapshot = replacement.snapshot; textReplacement = nil; needsDisplay = true }
         textView = nil
         textScrollView = nil
         scroll.removeFromSuperview()
@@ -828,22 +953,11 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
     }
 
     private func getPixelColor(at point: CGPoint) -> NSColor? {
-        let cg = shot.image
-        let scaleX = CGFloat(cg.width) / bounds.width
-        let scaleY = CGFloat(cg.height) / bounds.height
-        let px = Int(point.x * scaleX)
-        let py = Int((bounds.height - point.y) * scaleY)  // CGImage y flipped
-        guard px >= 0, py >= 0, px < cg.width, py < cg.height else { return nil }
-
-        guard let data = cg.dataProvider?.data,
-              let ptr = CFDataGetBytePtr(data) else { return nil }
-        let bpp = cg.bitsPerPixel / 8
-        let offset = py * cg.bytesPerRow + px * bpp
-        guard offset + 2 < CFDataGetLength(data) else { return nil }
-        let r = ptr[offset]
-        let g = ptr[offset + 1]
-        let b = ptr[offset + 2]
-        return NSColor(red: CGFloat(r) / 255.0, green: CGFloat(g) / 255.0, blue: CGFloat(b) / 255.0, alpha: 1.0)
+        guard let raster else { return nil }
+        let x = min(raster.width - 1, max(0, Int(point.x * CGFloat(raster.width) / bounds.width)))
+        let y = min(raster.height - 1, max(0, Int((bounds.height - point.y) * CGFloat(raster.height) / bounds.height)))
+        guard let (r, g, b) = raster.color(x: x, y: y) else { return nil }
+        return NSColor(srgbRed: CGFloat(r) / 255, green: CGFloat(g) / 255, blue: CGFloat(b) / 255, alpha: 1)
     }
 
     // MARK: - 工具条显示/定位
@@ -851,37 +965,195 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
     private func showToolbar() {
         if toolbar == nil {
             let tb = EditorToolbar(editor: self)
-            addSubview(tb)
+            let container = NSScrollView()
+            container.documentView = tb; container.hasHorizontalScroller = true; container.autohidesScrollers = true; container.drawsBackground = false
+            addSubview(container); toolbarScroll = container
             toolbar = tb
         }
         layoutToolbar()
     }
 
     private func hideToolbar() {
+        guard !externalToolbar else { return }
+        toolbarScroll?.removeFromSuperview(); toolbarScroll = nil
         toolbar?.removeFromSuperview()
         toolbar = nil
     }
 
     private func layoutToolbar() {
-        guard let tb = toolbar, let sel = selection else { return }
-        let size = tb.frame.size
+        guard !externalToolbar, let tb = toolbar, let sel = selection else { return }
+        let width = min(tb.frame.width, max(100, bounds.width - 16))
+        let size = CGSize(width: width, height: tb.frame.height + (width < tb.frame.width ? 14 : 0))
         var x = sel.midX - size.width / 2
         var y = sel.minY - size.height - 8          // 选区下方
         if y < 8 { y = sel.maxY + 8 }               // 下方放不下就放上方
         if y + size.height > bounds.height - 8 { y = bounds.height - size.height - 8 }
         x = max(8, min(x, bounds.width - size.width - 8))
-        tb.setFrameOrigin(CGPoint(x: x, y: y))
+        toolbarScroll?.frame = CGRect(x: x, y: y, width: size.width, height: size.height)
+        tb.setFrameOrigin(.zero)
         window?.invalidateCursorRects(for: tb)   // 刷新光标区域，让工具条上显示箭头
     }
 
     // MARK: - 生成最终结果图
 
-    private func renderResult() -> NSImage? {
+    func renderResult() -> NSImage? {
         finishTextEditing()
         guard let sel = selection, sel.width >= 1, sel.height >= 1 else { return nil }
 
         guard let image = ScreenshotRenderer.render(image: shot.image, selection: sel,
                                                      viewSize: bounds.size, annotations: annotations) else { return nil }
-        return NSImage(cgImage: image, size: sel.size)
+        guard let decorated = decoration.apply(image) else { AppDialogs.error("图片过大，无法添加边框效果。"); return nil }
+        return NSImage(cgImage: decorated, size: CGSize(width: decorated.width, height: decorated.height))
+    }
+    func installExternalToolbar(_ toolbar: EditorToolbar) {
+        toolbarScroll?.removeFromSuperview(); toolbarScroll = nil
+        self.toolbar?.removeFromSuperview(); self.toolbar = toolbar; externalToolbar = true
+        historyLabel.isHidden = true
+    }
+    func setSelection(_ rect: CGRect) {
+        selection = rect.intersection(bounds); refreshSessionView()
+    }
+    func replaceBackground(_ image: CGImage) {
+        shot = DisplayShot(screen: shot.screen, image: image, windows: shot.windows)
+        displayImage = NSImage(cgImage: image, size: bounds.size); raster = try? PixelRaster(image); needsDisplay = true
+    }
+    private func makeAnnotation(_ tool: AnnotationTool) -> Annotation {
+        var ann = annotationStyle; ann.tool = tool; ann.color = strokeColor; ann.lineWidth = strokeWidth
+        ann.fontSize = textFontSize; ann.fontWeight = textFontWeight; return ann
+    }
+    private func finishPolyline() {
+        guard let ann = currentAnnotation, ann.points.count >= 2 else { currentAnnotation = nil; return }
+        let previous = session.snapshot; annotations.append(ann); currentAnnotation = nil; session.commit(from: previous)
+    }
+    private func editTextAnnotation(at index: Int) {
+        let original = session.snapshot, ann = annotations[index]
+        annotations.remove(at: index)
+        annotationStyle = ann; strokeColor = ann.color; textFontSize = ann.fontSize; textFontWeight = ann.fontWeight
+        beginTextEditing(at: CGPoint(x: ann.start.x, y: ann.start.y + ann.textBoundingRect().height))
+        textReplacement = (original, index); textView?.string = ann.text
+        textDidChange(Notification(name: NSText.didChangeNotification))
+    }
+    private func nudge(with event: NSEvent) {
+        guard var rect = selection else {
+            guard isLiveCapture else { return }
+            let amount = (event.modifierFlags.contains(.option) ? 10.0 : 1.0) / shot.screen.backingScaleFactor
+            var point = hoverPoint ?? CGPoint(x: bounds.midX, y: bounds.midY)
+            if event.keyCode == 123 { point.x -= amount }; if event.keyCode == 124 { point.x += amount }
+            if event.keyCode == 125 { point.y -= amount }; if event.keyCode == 126 { point.y += amount }
+            point.x = max(0, min(bounds.width - amount, point.x)); point.y = max(0, min(bounds.height - amount, point.y))
+            let global = CGPoint(x: shot.screen.frame.minX + point.x, y: (NSScreen.screens.first?.frame.height ?? 0) - shot.screen.frame.minY - point.y)
+            // Native cursor movement is performed only for a user's arrow-key action
+            // while the capture surface owns keyboard focus.
+            CGWarpMouseCursorPosition(global); hoverPoint = point; updateRGBLabel(at: point); needsDisplay = true
+            return
+        }
+        let pixel = bounds.width / CGFloat(shot.image.width)
+        let step: CGFloat = event.modifierFlags.contains(.option) ? pixel * 10 : pixel
+        let dx: CGFloat = event.keyCode == 123 ? -step : (event.keyCode == 124 ? step : 0)
+        let dy: CGFloat = event.keyCode == 125 ? -step : (event.keyCode == 126 ? step : 0)
+        let previous = session.snapshot
+        if !selectedIndices.isEmpty {
+            for i in selectedIndices where annotations.indices.contains(i) { annotations[i].translate(x: dx, y: dy) }
+        } else if event.modifierFlags.contains(.shift) {
+            rect.size.width = max(pixel, min(bounds.maxX - rect.minX, rect.width + dx))
+            rect.size.height = max(pixel, min(bounds.maxY - rect.minY, rect.height + dy)); selection = rect
+        } else { rect.origin.x += dx; rect.origin.y += dy; selection = clampRectIntoBounds(rect) }
+        let selected = selectedIndices, primary = selectedAnnotationIndex
+        session.commit(from: previous); selectedIndices = selected; selectedAnnotationIndex = primary
+    }
+    private func copyColor() {
+        if let p = hoverPoint, let c = getPixelColor(at: p) { Clipboard.copy(text: "#" + c.hexString); setHistoryStatus("已复制 #" + c.hexString) }
+    }
+    private func drawMagnifier(at point: CGPoint) {
+        let options = AppearanceSettings.options
+        let side: CGFloat = options.magnifierSize
+        var box = CGRect(x: point.x + 22, y: point.y - side - 22, width: side, height: side)
+        box.origin.x = max(4, min(box.minX, bounds.width - side - 4)); box.origin.y = max(4, min(box.minY, bounds.height - side - 4))
+        let sample = CGRect(x: point.x - 8, y: point.y - 8, width: 16, height: 16).intersection(bounds)
+        let pixels = PixelGeometry.cropRect(selection: sample, viewSize: bounds.size, imageSize: CGSize(width: shot.image.width, height: shot.image.height))
+        if let image = shot.image.cropping(to: pixels) {
+            NSGraphicsContext.saveGraphicsState(); NSGraphicsContext.current?.imageInterpolation = .none
+            let shape = options.magnifierRound ? NSBezierPath(ovalIn: box) : NSBezierPath(rect: box)
+            shape.addClip(); NSImage(cgImage: image, size: box.size).draw(in: box); NSGraphicsContext.restoreGraphicsState()
+            NSColor.labelColor.setStroke(); shape.stroke()
+            guard options.magnifierCrosshair else { return }
+            let cross = NSBezierPath(); cross.move(to: CGPoint(x: box.midX - 5, y: box.midY)); cross.line(to: CGPoint(x: box.midX + 5, y: box.midY))
+            cross.move(to: CGPoint(x: box.midX, y: box.midY - 5)); cross.line(to: CGPoint(x: box.midX, y: box.midY + 5)); NSColor.systemRed.setStroke(); cross.stroke()
+        }
+    }
+    private func rememberRegion() {
+        guard isLiveCapture, let selection, let id = shot.screen.displayID else { return }
+        SettingsManager.rememberRegion(selection, displayID: id)
+    }
+    func actionLongCapture() {
+        guard isLiveCapture, let selection, selection.width >= 32, selection.height >= 64 else { return }
+        controller?.startLongCapture(on: shot.screen, selection: selection)
+    }
+    func actionBarcode() { guard let image = renderResult() else { return }; OCRResultController.present(image: image, barcode: true) }
+    func actionQuickSave() { guard let image = renderResult() else { return }; if ImageFileSaver.quickSave(image) { setHistoryStatus("已快速保存") } }
+    func actionShare() {
+        guard let image = renderResult() else { return }
+        NSSharingServicePicker(items: [image]).show(relativeTo: toolbarScroll?.frame ?? visibleRect, of: self, preferredEdge: .minY)
+    }
+    func showStyleOptions() {
+        let initial = selectedAnnotationIndex.flatMap { annotations.indices.contains($0) ? annotations[$0] : nil } ?? makeAnnotation(activeTool ?? .rectangle)
+        guard let changed = AnnotationInspector.edit(initial) else { return }
+        AppearanceSettings.remember(changed)
+        annotationStyle = changed; strokeColor = changed.color; strokeWidth = changed.lineWidth; textFontSize = changed.fontSize; textFontWeight = changed.fontWeight
+        if let i = selectedAnnotationIndex, annotations.indices.contains(i) {
+            let previous = session.snapshot
+            let indices = selectedIndices.isEmpty ? Set([i]) : selectedIndices
+            for index in indices where annotations.indices.contains(index) {
+                var value = changed; value.tool = annotations[index].tool; value.start = annotations[index].start
+                value.end = annotations[index].end; value.points = annotations[index].points; value.text = annotations[index].text
+                value.number = annotations[index].number; value.textMaxWidth = annotations[index].textMaxWidth; annotations[index] = value
+            }
+            session.commit(from: previous)
+        }
+        toolbar?.refreshToolSelection(); needsDisplay = true
+    }
+    private func copyAnnotations() {
+        let values = selectedIndices.sorted().compactMap { annotations.indices.contains($0) ? annotations[$0] : nil }
+        guard !values.isEmpty, let data = try? JSONEncoder().encode(values) else { return }
+        NSPasteboard.general.clearContents(); NSPasteboard.general.setData(data, forType: .init("com.gaoyiming.Scapare.annotations"))
+    }
+    private func pasteAnnotations() {
+        guard let data = NSPasteboard.general.data(forType: .init("com.gaoyiming.Scapare.annotations")), data.count < 10_000_000,
+              var values = try? JSONDecoder().decode([Annotation].self, from: data), values.count <= 1000, values.allSatisfy(\.isValid) else { return }
+        let previous = session.snapshot
+        for i in values.indices { values[i].translate(x: 10, y: -10) }
+        annotations += values; session.commit(from: previous)
+    }
+    @objc private func styleCommand() { showStyleOptions() }
+    @objc private func colorCommand() { copyColor() }
+    @objc private func magnifierCommand() { showMagnifier.toggle(); needsDisplay = true }
+    @objc private func longCaptureCommand() { actionLongCapture() }
+    @objc private func barcodeCommand() { actionBarcode() }
+    @objc private func quickSaveCommand() { actionQuickSave() }
+    @objc private func shareCommand() { actionShare() }
+    @objc private func refreshCommand() { controller?.refreshCapture() }
+    @objc private func copyFileCommand() { if let image = renderResult() { ImageFileSaver.copyAsFile(image) } }
+    @objc private func decorationCommand() {
+        guard let values = AppDialogs.fields(title: "导出效果（像素，选区尺寸不含边框）", labels: ["圆角", "边框", "阴影（0 关 / 1 开）"], values: [String(Int(decoration.cornerRadius)), String(Int(decoration.borderWidth)), decoration.shadow ? "1" : "0"]),
+              let radius = Double(values[0]), let border = Double(values[1]), radius.isFinite, border.isFinite,
+              (0...500).contains(radius), (0...100).contains(border), ["0", "1"].contains(values[2]) else { return }
+        decoration = ImageDecoration(cornerRadius: radius, borderWidth: border, shadow: values[2] == "1")
+        setHistoryStatus("导出效果已设置：内容尺寸不含边框与阴影留白")
+    }
+    @objc private func unitCommand() { UserDefaults.standard.set(!UserDefaults.standard.bool(forKey: "selection_in_points"), forKey: "selection_in_points"); needsDisplay = true }
+    @objc private func sizeCommand() {
+        let current = selection ?? bounds
+        let scale = UserDefaults.standard.bool(forKey: "selection_in_points") ? 1 : CGFloat(shot.image.width) / bounds.width
+        let unit = UserDefaults.standard.bool(forKey: "selection_in_points") ? "点" : "像素"
+        guard let values = AppDialogs.fields(title: "精确选区（\(unit)，左上角为原点）", labels: ["X", "Y", "宽度", "高度"], values: [String(Int(current.minX * scale)), String(Int((bounds.height - current.maxY) * scale)), String(Int(current.width * scale)), String(Int(current.height * scale))]),
+              let x = Double(values[0]), let y = Double(values[1]), let w = Double(values[2]), let h = Double(values[3]), [x, y, w, h].allSatisfy({ $0.isFinite && abs($0) <= 100_000 }), w > 0, h > 0 else { return }
+        let previous = session.snapshot
+        selection = clampRectIntoBounds(CGRect(x: x / scale, y: bounds.height - (y + h) / scale, width: min(bounds.width, w / scale), height: min(bounds.height, h / scale)))
+        session.commit(from: previous)
+    }
+    @objc private func ratioCommand() {
+        guard let values = AppDialogs.fields(title: "固定宽高比（0 为自由）", labels: ["宽", "高"], values: ["0", "0"]),
+              let w = Double(values[0]), let h = Double(values[1]), w.isFinite, h.isFinite else { return }
+        fixedRatio = w > 0 && h > 0 ? w / h : nil
     }
 }

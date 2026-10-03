@@ -1,13 +1,15 @@
 import AppKit
 import ScreenCaptureKit
 import Carbon.HIToolbox
+import Darwin
 
 @main
 struct RegressionTests {
     @MainActor static func main() async throws {
+        setbuf(stdout, nil)
         var passed = 0
-        func check(_ condition: @autoclosure () -> Bool, _ name: String) {
-            guard condition() else { fatalError("FAIL: \(name)") }
+        func check(_ condition: @autoclosure () throws -> Bool, _ name: String) rethrows {
+            guard try condition() else { fatalError("FAIL: \(name)") }
             passed += 1
             print("PASS: \(name)")
         }
@@ -153,6 +155,161 @@ struct RegressionTests {
         let exported = NSBitmapImageRep(data: NSImage(cgImage: marked, size: selection.size).pngData!)!
         check(exported.pixelsWide == 42 && exported.pixelsHigh == 32,
               "Final PNG encoding preserves the dimensions shown in the selection label")
+
+        func patterned(width: Int, height: Int) -> PixelRaster {
+            var bytes = [UInt8](repeating: 255, count: width * height * 4)
+            var random: UInt64 = 1289
+            for y in 0..<height { for x in 0..<width {
+                random = random &* 6364136223846793005 &+ 1442695040888963407
+                let v = UInt8(truncatingIfNeeded: random >> 32), i = (y * width + x) * 4
+                bytes[i] = v; bytes[i+1] = v; bytes[i+2] = v
+            } }
+            return PixelRaster(width: width, height: height, bytes: bytes)
+        }
+        let page = patterned(width: 96, height: 800)
+        let frame1 = page.rows(0..<240), frame2 = page.rows(80..<320), frame3 = page.rows(180..<420)
+        let roundTrip = try PixelRaster(frame1.image()!)
+        check(roundTrip.bytes == frame1.bytes, "Pixel normalization preserves row order and colors")
+        try check(try ScrollMatcher.match(frame1, frame1) == .unchanged, "Stationary long-capture frames are ignored")
+        try check(try ScrollMatcher.match(frame1, frame2) == .advance(80), "Long capture finds an exact vertical overlap")
+        var stitcher = ScrollStitcher(first: frame1)
+        _ = try stitcher.append(frame2); _ = try stitcher.append(frame3)
+        let stitched = try PixelRaster(stitcher.image()!)
+        check(stitcher.height == 420 && stitcher.frameCount == 3 && stitched.bytes == page.rows(0..<420).bytes,
+              "Three scrolling frames stitch into the exact original pixels without duplicate rows")
+        let stitchedHeight = stitcher.height
+        do { _ = try stitcher.append(page.rows(500..<740)); fatalError("Unmatched scroll accepted") }
+        catch { check(stitcher.height == stitchedHeight, "Excessive scroll leaves the completed long capture intact") }
+        do { _ = try ScrollMatcher.match(frame2, frame1); fatalError("Reverse scroll accepted") }
+        catch { check(true, "Reverse scrolling is not silently appended") }
+        var limited = ScrollStitcher(first: frame1, maxHeight: 260)
+        do { _ = try limited.append(frame2); fatalError("Long capture exceeded its limit") }
+        catch { check(limited.height == 240, "Long capture enforces its length limit without losing previous frames") }
+        var repeatedBytes = frame1.bytes
+        for y in 0..<240 { for x in 0..<96 {
+            let i = (y * 96 + x) * 4, value: UInt8 = (y % 20 < 8) ? 0 : 255
+            repeatedBytes[i] = value; repeatedBytes[i+1] = value; repeatedBytes[i+2] = value
+        } }
+        let repeating = PixelRaster(width: 96, height: 240, bytes: repeatedBytes)
+        let shiftedRepeating = PixelRaster(width: 96, height: 240, bytes: Array(repeatedBytes[(5 * 96 * 4)...]) + Array(repeatedBytes[..<(5 * 96 * 4)]))
+        do { _ = try ScrollMatcher.match(repeating, shiftedRepeating); fatalError("Ambiguous repeated texture accepted") }
+        catch { check(true, "Repeated patterns are rejected instead of producing a guessed seam") }
+        do { _ = try ScrollMatcher.match(frame1, page.rows(0..<200)); fatalError("Different size accepted") }
+        catch { check(true, "Long capture rejects changed viewport dimensions") }
+
+        let turned = try ImageTransform.apply(frame1.image()!, quarterTurns: 1, flipHorizontal: false, flipVertical: false)
+        check(turned.width == 240 && turned.height == 96, "Pin rotation swaps dimensions")
+        let restored = try ImageTransform.apply(turned, quarterTurns: -1, flipHorizontal: false, flipVertical: false)
+        let restoredPixels = try PixelRaster(restored)
+        check(restoredPixels.bytes == frame1.bytes, "Inverse pin rotations preserve every pixel")
+        let flipped = try ImageTransform.apply(frame1.image()!, quarterTurns: 0, flipHorizontal: true, flipVertical: false)
+        let unflipped = try ImageTransform.apply(flipped, quarterTurns: 0, flipHorizontal: true, flipVertical: false)
+        let unflippedPixels = try PixelRaster(unflipped)
+        check(unflippedPixels.bytes == frame1.bytes, "Two horizontal flips restore the source pixels")
+        let sourceImage = NSImage(cgImage: frame1.image()!, size: CGSize(width: 96, height: 240))
+        for ext in ["png", "jpg", "tiff", "bmp", "gif"] {
+            let encoded = try ImageFileSaver.encoded(sourceImage, extension: ext)
+            let decoded = NSBitmapImageRep(data: encoded)!
+            check(decoded.pixelsWide == 96 && decoded.pixelsHigh == 240, "\(ext.uppercased()) export preserves image dimensions")
+        }
+        var styled = annotation
+        styled.tool = .highlighter; styled.dashed = true; styled.rotation = 30; styled.opacity = 0.5
+        styled.textBackground = "FFFFFF"; styled.doubleArrow = true; styled.ellipticalMask = true
+        let decodedAnnotation = try JSONDecoder().decode(Annotation.self, from: JSONEncoder().encode(styled))
+        check(decodedAnnotation.tool == styled.tool && decodedAnnotation.color.hexString == styled.color.hexString && decodedAnnotation.rotation == 30 && decodedAnnotation.dashed && decodedAnnotation.opacity == 0.5,
+              "Editable annotations preserve style and geometry through backup encoding")
+        let photoData = sourceImage.pngData!
+        var pin = PinRecord(imageData: photoData, snapshot: EditSnapshot(selection: CGRect(x: 0, y: 0, width: 96, height: 240), annotations: [styled]), frame: CGRect(x: 20, y: 30, width: 96, height: 240))
+        pin.group = "设计参考"; pin.quarterTurns = 1; pin.hidden = true
+        let pinStore = PinStore(url: temp.appendingPathComponent("Pins.json"))
+        try pinStore.write([pin]); let loaded = try pinStore.read()
+        check(loaded.count == 1 && loaded[0].group == pin.group && loaded[0].hidden && loaded[0].snapshot?.annotations.first?.tool == .highlighter,
+              "Pin backups preserve image data, groups, visibility and editable annotations")
+        pin.group = "新分组"; try pinStore.write([pin])
+        try Data("invalid".utf8).write(to: pinStore.url)
+        try check(try pinStore.read()[0].group == "设计参考", "A corrupt pin archive recovers from the previous valid backup")
+        do { _ = try PinStore.decode(JSONEncoder().encode(PinArchive(version: 99, pins: [pin]))); fatalError("Unknown schema accepted") }
+        catch { check(true, "Pin import rejects unsupported archive versions") }
+        do { _ = try PinStore.decode(JSONEncoder().encode(PinArchive(pins: [pin, pin]))); fatalError("Duplicate pin IDs accepted") }
+        catch { check(true, "Pin import rejects duplicate identities") }
+        let sourceRaster = frame1.image()!
+        if let mosaic = ImageEffects.redact(sourceRaster, tool: .mosaic, amount: 12), let blurred = ImageEffects.redact(sourceRaster, tool: .blur, amount: 12) {
+            let m = try PixelRaster(mosaic), b = try PixelRaster(blurred)
+            check(m.width == 96 && m.height == 240 && m.bytes != frame1.bytes, "Mosaic changes source pixels while preserving dimensions")
+            check(b.width == 96 && b.height == 240 && b.bytes != frame1.bytes, "Blur changes source pixels while preserving dimensions")
+        } else { fatalError("Redaction filters failed") }
+        let tall = patterned(width: 96, height: 2100)
+        try check(try ScrollMatcher.match(tall.rows(0..<1600), tall.rows(307..<1907)) == .advance(307), "Retina-height scrolling finds non-grid-aligned offsets")
+        let decorated = ImageDecoration(cornerRadius: 20, borderWidth: 2, shadow: true).apply(sourceRaster)!
+        check(decorated.width == 136 && decorated.height == 280, "Decorated export includes measured border and shadow padding")
+        let rounded = try PixelRaster(ImageDecoration(cornerRadius: 20).apply(sourceRaster)!)
+        check(rounded.bytes[3] == 0 && rounded.bytes[(120 * 96 + 48) * 4 + 3] == 255, "Rounded export keeps transparent corners and opaque image content")
+        let jpeg = try ImageFileSaver.encoded(NSImage(cgImage: rounded.image()!, size: CGSize(width: 96, height: 240)), extension: "jpg")
+        let jpegRaster = try PixelRaster(NSBitmapImageRep(data: jpeg)!.cgImage!)
+        check(jpegRaster.bytes[0] > 230 && jpegRaster.bytes[1] > 230 && jpegRaster.bytes[2] > 230, "JPEG flattens transparent corners onto white")
+
+        var request = AutomationRequest(command: "process"); request.region = [8, 20, 40, 60]; request.rotation = 90
+        let processed = try AutomationImages.process(photoData, request: request)
+        let output = NSBitmapImageRep(data: processed)!
+        check(output.pixelsWide == 60 && output.pixelsHigh == 40, "CLI crop then rotation produces exact expected dimensions")
+        request.region = [-2, 0, 40, 60]
+        do { _ = try AutomationImages.process(photoData, request: request); fatalError("Out-of-bounds CLI crop accepted") }
+        catch { check(true, "CLI refuses out-of-bounds crop without silently changing the request") }
+        request = AutomationRequest(command: "process"); request.rotation = 13
+        do { _ = try AutomationImages.process(photoData, request: request); fatalError("Invalid rotation accepted") }
+        catch { check(true, "CLI rejects unsupported rotation") }
+        request.rotation = nil; request.mosaic = [[0, 0, 48, 80]]
+        let redacted = try PixelRaster(NSBitmapImageRep(data: AutomationImages.process(photoData, request: request))!.cgImage!)
+        check(redacted.rows(0..<80).bytes != frame1.rows(0..<80).bytes && redacted.rows(80..<240).bytes == frame1.rows(80..<240).bytes,
+              "CLI redaction affects the top-left requested region only")
+        var cover = Annotation(tool: .rectangle, color: .red, lineWidth: 2); cover.filled = true; cover.start = .zero; cover.end = CGPoint(x: 96, y: 240)
+        var erase = Annotation(tool: .eraser, color: .black, lineWidth: 2); erase.start = CGPoint(x: 0, y: 160); erase.end = CGPoint(x: 48, y: 240)
+        let erasedImage = ScreenshotRenderer.render(image: sourceRaster, selection: CGRect(x: 0, y: 0, width: 96, height: 240), viewSize: CGSize(width: 96, height: 240), annotations: [cover, erase])!
+        let erasedPixels = try PixelRaster(erasedImage)
+        check(Array(erasedPixels.bytes[0..<48 * 4]) == Array(frame1.bytes[0..<48 * 4]) && erasedPixels.bytes[120 * 96 * 4] > 240,
+              "Eraser restores original pixels over earlier annotations only within its region")
+        var invalid = styled; invalid.fontSize = .infinity
+        check(!invalid.isValid, "Import rejects non-finite annotation geometry")
+        pin.snapshot = EditSnapshot(selection: CGRect(x: 0, y: 0, width: -1, height: 20), annotations: [])
+        // CGRect normalizes negative widths in its accessors, so test a non-finite extent instead.
+        pin.snapshot?.selection = CGRect(x: 0, y: 0, width: CGFloat.infinity, height: 20)
+        do { _ = try PinStore.decode(JSONEncoder().encode(PinArchive(pins: [pin]))); fatalError("Invalid snapshot accepted") }
+        catch { check(true, "Invalid editable backup geometry is rejected") }
+        let rich = ClipboardText.html("<p><strong>Hello</strong> &amp; <em>world</em> &#x4F60;</p><script>secret()</script><img src='https://example.invalid/a.png'>")
+        check(rich.string.contains("Hello & world 你") && !rich.string.contains("secret"), "Clipboard HTML keeps text and entities while dropping executable content")
+        let boldFont = rich.attribute(.font, at: 0, effectiveRange: nil) as! NSFont
+        check(NSFontManager.shared.traits(of: boldFont).contains(.boldFontMask), "Clipboard HTML preserves local bold formatting")
+        check(ClipboardText.image(rich).size.width > 100, "Rich clipboard text renders to a bounded local image")
+        var options = AppearanceOptions()
+        check(options.isValid, "Default appearance satisfies configuration bounds")
+        options.magnifierSize = .infinity
+        check(!options.isValid, "Appearance import rejects invalid dimensions")
+        options = AppearanceOptions(); options.palette = ["FF0000", "0000FF"]
+        try check(try JSONDecoder().decode(AppearanceOptions.self, from: JSONEncoder().encode(options)) == options, "Shared appearance preserves palette order and settings")
+        styled.fontName = "Helvetica"; styled.textOutlineColor = "123456"; styled.arrowStyle = 1
+        let richAnnotation = try JSONDecoder().decode(Annotation.self, from: JSONEncoder().encode(styled))
+        check(richAnnotation.fontName == "Helvetica" && richAnnotation.textOutlineColor == "123456" && richAnnotation.arrowStyle == 1, "Backup preserves custom fonts, outline colors and arrow styles")
+
+        let socketDirectory = URL(fileURLWithPath: "/private/tmp/sc-ipc-" + String(UUID().uuidString.prefix(8)))
+        defer { try? FileManager.default.removeItem(at: socketDirectory) }
+        let socketPath = socketDirectory.appendingPathComponent("socket").path
+        let server = LocalAutomationServer(path: socketPath) { data in data }
+        try server.start(); defer { server.stop() }
+        let reply = try await Task.detached {
+            let fd = try AutomationWire.connect(to: socketPath); defer { Darwin.close(fd) }
+            let data = Data("Scapare protocol round-trip".utf8)
+            try AutomationWire.send(data, to: fd); return try AutomationWire.receive(from: fd)
+        }.value
+        check(reply == Data("Scapare protocol round-trip".utf8), "Local automation round-trip preserves request bytes")
+        let socketAttributes = try FileManager.default.attributesOfItem(atPath: socketPath)
+        check((socketAttributes[.posixPermissions] as? NSNumber)?.intValue == 0o600, "Local socket is accessible only to its owner")
+        let secondServer = LocalAutomationServer(path: socketPath) { data in data }
+        do { try secondServer.start(); fatalError("Active socket replaced") }
+        catch { check(true, "A second App instance cannot replace the active command socket") }
+        server.stop()
+        check(!FileManager.default.fileExists(atPath: socketPath), "Disabling local automation removes its endpoint")
+        do { _ = try AutomationWire.address(String(repeating: "x", count: 200)); fatalError("Oversized path accepted") }
+        catch { check(true, "Oversized socket paths fail before a descriptor is opened") }
         print("\(passed) regression checks passed.")
     }
 }

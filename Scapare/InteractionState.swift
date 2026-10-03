@@ -31,7 +31,7 @@ final class ShortcutBinding<Registration> {
     }
 }
 
-struct EditSnapshot: Equatable {
+struct EditSnapshot: Equatable, Codable {
     var selection: CGRect?
     var annotations: [Annotation] = []
 }
