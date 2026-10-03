@@ -1,0 +1,66 @@
+{
+  "date": "2026-10-03",
+  "baseline_commit": "e6cce818dba63e9c13bab913dcff9a8be6446d2a",
+  "regressions": {
+    "command": "scripts/test.sh",
+    "passed": 36,
+    "failed": 0,
+    "output": "regression-results-2026-10-03.txt"
+  },
+  "debug": {
+    "result": "BUILD SUCCEEDED",
+    "architecture": "arm64",
+    "signed": false
+  },
+  "release_archive": {
+    "result": "ARCHIVE SUCCEEDED",
+    "architectures": [
+      "x86_64",
+      "arm64"
+    ],
+    "signed": false
+  },
+  "bundle": {
+    "CFBundleName": "Scapare",
+    "CFBundleDisplayName": "Scapare",
+    "CFBundleExecutable": "Scapare",
+    "CFBundleIdentifier": "com.gaoyiming.SnapTool",
+    "CFBundleShortVersionString": "1.0",
+    "CFBundleVersion": "2",
+    "LSMinimumSystemVersion": "14.0"
+  },
+  "source_sha256": {
+    "Scapare/Annotation.swift": "305db991ca5abcc2c02f1528b5b4b552fa7109eaefe73c62ca0b1fd488e8e4a3",
+    "Scapare/AppDelegate.swift": "09f59a07f70f9368aaeba0e8d8abd579fac1a9c115ac89c3fb4aa8068e8a482d",
+    "Scapare/CaptureController.swift": "f519beceebb8447c7c4080711fcf85de091cc23fa2951fefca317adacded84d8",
+    "Scapare/EditorToolbar.swift": "2f6ba9421916a0d38fbc42489d35814f98e17a31b2438995e28a054fcc36ac61",
+    "Scapare/EditorView.swift": "86eb5f8f234a2f9c586d6a95b6b4993dc520152cbae229be2e5d13c996ab58b0",
+    "Scapare/GlobalHotKey.swift": "f7135ff735d7b5c703e83fa1a666ec37a9177cf943d4fb4028e3d284da753b0d",
+    "Scapare/Helpers.swift": "c5b8a6c013e9aecfa1df6357119d0de5c2a746fa479e759a2d7b5b65f6127320",
+    "Scapare/ImageFileSaver.swift": "5b47f3f811950e1853152b44878edc6f512478bece7d875cfdbf053776652c89",
+    "Scapare/InteractionState.swift": "ecbddaac82163e746dd724075cba10c37dee9c891605617113583fcaef5b1eae",
+    "Scapare/OCRResultWindow.swift": "0aaf0dcc75e1737123d53ce88f11fcc1abc55d3e709e397bcb18461bd32d9c62",
+    "Scapare/OCRService.swift": "f5877bc73261f786cb4e357bdcb4aefd60bfbabf911a7f508cfeb9fa6ff017f5",
+    "Scapare/Overlay.swift": "d669856708d7331410d607f8317619202234235835eda99ef8674ac1b2c210c2",
+    "Scapare/Permission.swift": "16289230352ce697b70195aae2f10357167f326f4cfbc29bc228e9b7ac4bab80",
+    "Scapare/PinWindow.swift": "5567312ecad0551f1ba03c7093f089e764e06b4cbbb8dcab798214b05d318a96",
+    "Scapare/ScapareApp.swift": "913caef474f13b2d88aa167640c8b9f7c9d3f5a8046118bc4da13fbc4786fe1c",
+    "Scapare/ScreenshotEngine.swift": "20b7f06e7a96d65596b61bf0db6f356a12be3ccbbb98e3877807aad1e2695a9b",
+    "Scapare/ScreenshotRenderer.swift": "eb1317f00af14aa936338429faa3d2b6519907486198a113def2d539b535bba2",
+    "Scapare/SettingsManager.swift": "36664d1bcbdcb03051aa7811b4f11825823f53511af7e76e63553dd229c0936e",
+    "Scapare/SetupWindow.swift": "86b8035cf2932344d18393fa401b5ae0054dc71ac5a81cdb0b4c158ec117ee43",
+    "Scapare/ShortcutRecorder.swift": "d085691d23005a374e7fcebec7afaf45e8053b3fea01b285bdd1aa252854fa0f"
+  },
+  "test_sha256": "36413ebddbf30a282110a6c7bbda6887ac6261d2b38009db95f563edfd55e2aa",
+  "test_runner_sha256": "26d296098e805ca449d5690296c664467577242aa57627e9d687292480b0a848",
+  "icon_sha256": "8c73bb025061c38571fd37f0ae2a21341d58de10a182234a59bcf4dabac2d2e4",
+  "runtime_ui": "unverified: Computer Use timeoutReached",
+  "remaining": [
+    "signed permissions and login item lifecycle",
+    "live keyboard and VoiceOver",
+    "light/dark appearance and layout",
+    "multi-display capture and performance",
+    "App Store Connect names, localizations and next build number"
+  ],
+  "published": false
+}

@@ -18,7 +18,7 @@ enum AnnotationTool: Equatable {
     case text
 }
 
-struct Annotation {
+struct Annotation: Equatable {
     var tool: AnnotationTool
     var color: NSColor
     var lineWidth: CGFloat

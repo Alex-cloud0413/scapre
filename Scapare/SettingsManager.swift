@@ -3,7 +3,7 @@
 //  Scapare
 //
 //  通过 UserDefaults 持久化用户偏好设置（快捷键等）。
-//  首次启动无记录时给出默认值（⌘S）。
+//  首次启动无记录时给出默认值（⌘E）。
 //
 
 import AppKit
@@ -14,6 +14,7 @@ enum SettingsManager {
     private static let kKeyCode = "shortcut_keyCode"
     private static let kModifiers = "shortcut_modifiers"
     private static let kHasSet = "shortcut_hasSet"
+    private static let kSetupCompleted = "setup_completed"
     private static let kCustomColor = "custom_color_hex"
 
     // 默认快捷键 ⌘E
@@ -33,20 +34,29 @@ enum SettingsManager {
         set { UserDefaults.standard.set(newValue, forKey: kHasSet) }
     }
 
+    static var setupCompleted: Bool {
+        get { UserDefaults.standard.bool(forKey: kSetupCompleted) }
+        set { UserDefaults.standard.set(newValue, forKey: kSetupCompleted) }
+    }
+
+    // Migrate existing users without losing their saved shortcut.
     // 首次启动时确保有默认值。
-    static func initializeDefaults() {
-        if !hasSetShortcut {
-            keyCode = defaultKeyCode
-            modifiers = defaultModifiers
+    static func initializeDefaults(in defaults: UserDefaults = .standard) {
+        if defaults.object(forKey: kSetupCompleted) == nil {
+            defaults.set(defaults.bool(forKey: kHasSet), forKey: kSetupCompleted)
+        }
+        if !defaults.bool(forKey: kHasSet) {
+            defaults.set(defaultKeyCode, forKey: kKeyCode)
+            defaults.set(defaultModifiers, forKey: kModifiers)
             // 不设 hasSetShortcut = true，让首次引导弹窗触发
         }
     }
 
     // 保存自定义快捷键并标记已设置过。
-    static func save(keyCode: UInt32, modifiers: UInt32) {
-        self.keyCode = keyCode
-        self.modifiers = modifiers
-        hasSetShortcut = true
+    static func save(keyCode: UInt32, modifiers: UInt32, in defaults: UserDefaults = .standard) {
+        defaults.set(keyCode, forKey: kKeyCode)
+        defaults.set(modifiers, forKey: kModifiers)
+        defaults.set(true, forKey: kHasSet)
     }
 
     // MARK: - 自定义颜色

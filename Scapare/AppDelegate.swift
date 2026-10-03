@@ -12,7 +12,7 @@ import AppKit
 import Carbon.HIToolbox
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private var hotKey: GlobalHotKey?
+    private let hotKey = ShortcutBinding<GlobalHotKey>()
     private var statusItem: NSStatusItem?
     private var shotMenuItem: NSMenuItem?
 
@@ -24,7 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         registerHotKey()
 
         // 首次启动：弹引导窗让用户选择快捷键
-        if !SettingsManager.hasSetShortcut {
+        if !SettingsManager.setupCompleted {
             DispatchQueue.main.async { [weak self] in
                 SetupWindowController.showSetup {
                     self?.refreshMenuShortcut()
@@ -36,17 +36,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - 全局热键
 
     private func registerHotKey() {
-        // 销毁旧的
-        hotKey = nil
-        hotKey = GlobalHotKey(keyCode: SettingsManager.keyCode,
-                              modifiers: SettingsManager.modifiers) {
-            CaptureController.shared.startCapture()
+        do {
+            try updateShortcut(keyCode: SettingsManager.keyCode, modifiers: SettingsManager.modifiers)
+        } catch {
+            DispatchQueue.main.async {
+                let alert = NSAlert()
+                alert.messageText = "截图快捷键不可用"
+                alert.informativeText = "可以通过菜单栏截图，或在设置中选择其他快捷键。\n\(error.localizedDescription)"
+                alert.addButton(withTitle: "打开设置")
+                alert.addButton(withTitle: "稍后")
+                if alert.runModal() == .alertFirstButtonReturn { SetupWindowController.showSettings() }
+            }
         }
     }
 
-    /// 当用户在设置面板里改了快捷键后调用
-    func reloadHotKey() {
-        registerHotKey()
+    func updateShortcut(keyCode: UInt32, modifiers: UInt32) throws {
+        let candidate = CaptureShortcut(keyCode: keyCode, modifiers: modifiers)
+        try hotKey.replace(with: candidate, register: { shortcut in
+            try GlobalHotKey(keyCode: shortcut.keyCode, modifiers: shortcut.modifiers) {
+                // A configured global shortcut must not interrupt in-app text entry/recording.
+                if NSApp.isActive && (NSApp.keyWindow?.firstResponder is NSTextView
+                    || NSApp.keyWindow?.firstResponder is ShortcutRecorder) { return }
+                CaptureController.shared.startCapture()
+            }
+        }, persist: { shortcut in
+            SettingsManager.save(keyCode: shortcut.keyCode, modifiers: shortcut.modifiers)
+        })
         refreshMenuShortcut()
     }
 
@@ -139,7 +154,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         • 拖动鼠标框选区域
         • 可标注、贴图、文字识别(OCR)、复制、保存
 
-        版本 1.0
+        版本 \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0")
         """
         alert.addButton(withTitle: "好的")
         alert.runModal()

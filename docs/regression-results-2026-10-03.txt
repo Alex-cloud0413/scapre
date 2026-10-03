@@ -1,0 +1,37 @@
+PASS: All F1–F12 work without modifiers
+PASS: Unmodified letters are rejected
+PASS: Escape remains a cancellation key
+PASS: Modifier-only input is rejected
+PASS: Modified letters are accepted
+PASS: Conflict keeps the working binding and saved settings
+PASS: Re-selecting the current shortcut is a no-op
+PASS: Successful registration commits the new shortcut
+PASS: First launch initializes a shortcut without completing onboarding
+PASS: Changing the shortcut preserves incomplete onboarding across launches
+PASS: Completed onboarding remains complete
+PASS: Existing users retain their shortcut during onboarding migration
+PASS: Undo removes the last annotation without losing the selection
+PASS: Redo restores the exact annotation
+PASS: History navigation preserves the edited session
+PASS: Each history entry has isolated undo state
+PASS: Undo and redo survive switching away and back
+PASS: History boundary does not mutate the active entry
+PASS: History retention stays bounded to six captures
+PASS: A new edit after undo discards stale redo
+PASS: Cancelling the save panel never writes or reports success
+PASS: Write failure surfaces once and returns to editing
+PASS: Retry writes the original image bytes successfully
+PASS: Loading, empty and failed OCR cannot copy placeholders
+PASS: Whitespace-only OCR is treated as empty
+PASS: OCR preserves meaningful multiline text
+PASS: Invalid OCR input produces an error rather than an empty success
+PASS: Permission denial is classified separately
+PASS: Unrelated capture failure does not request permissions
+PASS: Retina size uses the same integral pixel bounds as export
+PASS: Non-Retina crops preserve one pixel per point
+PASS: Text resize hit region matches the lower-right visual handle
+PASS: Annotation rendering preserves the exact source crop resolution
+PASS: Compositing retains the screenshot background
+PASS: Annotations align with the cropped source pixels on Retina
+PASS: Final PNG encoding preserves the dimensions shown in the selection label
+36 regression checks passed.

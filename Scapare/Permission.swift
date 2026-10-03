@@ -9,6 +9,20 @@
 import AppKit
 
 enum PermissionHelper {
+    static func showCaptureError(_ error: Error, retry: () -> Void) {
+        if let captureError = error as? ScreenshotError, case .permissionDenied = captureError {
+            showScreenRecordingHint()
+            return
+        }
+        let alert = NSAlert()
+        alert.messageText = "暂时无法截图"
+        alert.informativeText = "\(error.localizedDescription)\n\n可以重试，无需重新修改屏幕录制权限。"
+        alert.addButton(withTitle: "重试")
+        alert.addButton(withTitle: "取消")
+        NSApp.activate(ignoringOtherApps: true)
+        if alert.runModal() == .alertFirstButtonReturn { retry() }
+    }
+
     static func showScreenRecordingHint() {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()

@@ -11,7 +11,7 @@ import SwiftUI
 
 @main
 struct ScapareApp: App {
-    // 把 AppKit 的 AppDelegate 接进来，用于注册全局快捷键 ⌘S。
+    // 把 AppKit 的 AppDelegate 接进来，注册用户保存的截图快捷键（默认 ⌘E）。
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {

@@ -44,17 +44,9 @@ final class PinWindowController {
     }
 
     private func saveImage(_ image: NSImage) {
-        guard let data = image.pngData else { return }
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [.png]
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss"
-        panel.nameFieldStringValue = "截图 \(formatter.string(from: Date())).png"
-        NSApp.activate(ignoringOtherApps: true)
-        if panel.runModal() == .OK, let url = panel.url {
-            try? data.write(to: url)
-        }
+        _ = ImageFileSaver.save(image)
     }
+
 }
 
 // 贴图窗口需要能成为 key 窗口，才能接收键盘/双击等事件。

@@ -1,30 +1,20 @@
-//
-//  ShortcutRecorder.swift
-//  Scapare
-//
-//  一个快捷键「录制」控件。点击后进入录制模式，等待用户按下一个组合键，
-//  然后显示该快捷键（如 ⌘S），并通过回调通知外部。
-//
-
 import AppKit
 
 @MainActor
 final class ShortcutRecorder: NSView {
-    private let label: NSTextField
-    private var isRecording = false
-    private var currentKeyCode: UInt32
-    private var currentModifiers: UInt32
-    var onShortcutChanged: ((UInt32, UInt32) -> Void)?
+    private let label = NSTextField(labelWithString: "")
+    private(set) var isRecording = false
+    private var current: CaptureShortcut
+    var onShortcutChanged: ((UInt32, UInt32) throws -> Void)?
+    var onError: ((String) -> Void)?
 
     init(keyCode: UInt32, modifiers: UInt32) {
-        currentKeyCode = keyCode
-        currentModifiers = modifiers
-        label = NSTextField(labelWithString: "")
+        current = CaptureShortcut(keyCode: keyCode, modifiers: modifiers)
         super.init(frame: .zero)
         wantsLayer = true
         layer?.cornerRadius = 8
         layer?.borderWidth = 2
-        label.font = NSFont.monospacedSystemFont(ofSize: 20, weight: .medium)
+        label.font = .monospacedSystemFont(ofSize: 20, weight: .medium)
         label.alignment = .center
         label.translatesAutoresizingMaskIntoConstraints = false
         addSubview(label)
@@ -32,73 +22,62 @@ final class ShortcutRecorder: NSView {
             label.centerXAnchor.constraint(equalTo: centerXAnchor),
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
-        updateDisplay()
-        refreshAppearance()
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+        setAccessibilityLabel("截图快捷键")
+        setAccessibilityHelp("按空格或回车开始录制，按 Esc 取消。")
+        refresh()
     }
-
     required init?(coder: NSCoder) { fatalError("not used") }
-
     override var acceptsFirstResponder: Bool { true }
+    override var intrinsicContentSize: NSSize { NSSize(width: 200, height: 44) }
+    override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); refresh() }
+    override func becomeFirstResponder() -> Bool { refresh(); return true }
+    override func resignFirstResponder() -> Bool { isRecording = false; refresh(); return true }
+    override var focusRingMaskBounds: NSRect { bounds }
+    override func drawFocusRingMask() { NSBezierPath(roundedRect: bounds, xRadius: 8, yRadius: 8).fill() }
 
-    var displayString: String {
-        SettingsManager.shortcutDisplayString(keyCode: currentKeyCode, modifiers: currentModifiers)
+    private func refresh() {
+        let text = SettingsManager.shortcutDisplayString(keyCode: current.keyCode, modifiers: current.modifiers)
+        label.stringValue = isRecording ? "按下快捷键…" : text
+        layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+        layer?.borderColor = (isRecording ? NSColor.controlAccentColor : NSColor.separatorColor).cgColor
+        setAccessibilityValue(isRecording ? "正在录制，Esc 取消" : text)
     }
-
-    private func updateDisplay() {
-        label.stringValue = isRecording ? "按下快捷键…" : displayString
-    }
-
-    private func refreshAppearance() {
-        if isRecording {
-            layer?.backgroundColor = NSColor.systemBlue.withAlphaComponent(0.15).cgColor
-            layer?.borderColor = NSColor.systemBlue.cgColor
-        } else {
-            layer?.backgroundColor = NSColor(white: 1, alpha: 0.08).cgColor
-            layer?.borderColor = NSColor(white: 1, alpha: 0.3).cgColor
-        }
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        if isRecording {
-            stopRecording()
-        } else {
-            startRecording()
-        }
-    }
-
     private func startRecording() {
-        isRecording = true
-        refreshAppearance()
-        updateDisplay()
         window?.makeFirstResponder(self)
+        isRecording = true
+        onError?("")
+        refresh()
     }
-
-    private func stopRecording() {
-        isRecording = false
-        refreshAppearance()
-        updateDisplay()
-        window?.makeFirstResponder(nil)
+    private func stopRecording() { isRecording = false; refresh() }
+    override func mouseDown(with event: NSEvent) {
+        if isRecording { stopRecording() } else { startRecording() }
     }
-
+    override func accessibilityPerformPress() -> Bool { startRecording(); return true }
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard isRecording else { return super.performKeyEquivalent(with: event) }
+        accept(event)
+        return true
+    }
     override func keyDown(with event: NSEvent) {
-        guard isRecording else { super.keyDown(with: event); return }
-
-        // 忽略单独按修饰键（必须有非修饰键）
-        let modifierOnlyCodes: Set<UInt16> = [54, 55, 56, 57, 58, 59, 60, 61, 62, 63]
-        if modifierOnlyCodes.contains(event.keyCode) { return }
-
-        let (kc, mods) = SettingsManager.extract(from: event)
-
-        // 要求至少有一个修饰键（或功能键 F1-F12 可单独使用）
-        if mods == 0 && !(kc >= 122 && kc <= 111) { return }
-
-        currentKeyCode = kc
-        currentModifiers = mods
-        stopRecording()
-        onShortcutChanged?(kc, mods)
+        if isRecording { accept(event); return }
+        if [36, 49, 76].contains(event.keyCode) { startRecording() }
+        else { super.keyDown(with: event) }
     }
-
-    override var intrinsicContentSize: NSSize {
-        NSSize(width: 180, height: 44)
+    private func accept(_ event: NSEvent) {
+        if event.keyCode == 53 { stopRecording(); onError?(""); return }
+        let (key, modifiers) = SettingsManager.extract(from: event)
+        let candidate = CaptureShortcut(keyCode: key, modifiers: modifiers)
+        guard candidate.isValid else {
+            onError?("请使用组合键或 F1–F12；按 Esc 取消。")
+            return
+        }
+        do {
+            try onShortcutChanged?(key, modifiers)
+            current = candidate
+            onError?("")
+        } catch { onError?(error.localizedDescription) }
+        stopRecording()
     }
 }

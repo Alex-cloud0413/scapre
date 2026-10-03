@@ -16,8 +16,24 @@ struct DisplayShot {
     let image: CGImage   // 像素级原图（高清）
 }
 
-enum ScreenshotError: Error {
-    case noPermissionOrFailed
+enum ScreenshotError: LocalizedError {
+    case permissionDenied
+    case captureFailed(String)
+    case noDisplays
+    var errorDescription: String? {
+        switch self {
+        case .permissionDenied: return "Scapare 尚未获得屏幕录制权限。"
+        case .captureFailed(let reason): return reason
+        case .noDisplays: return "没有找到可捕获的显示器，请确认显示器已连接。"
+        }
+    }
+    static func classify(_ error: Error) -> ScreenshotError {
+        let ns = error as NSError
+        if ns.domain == SCStreamErrorDomain && ns.code == SCStreamError.Code.userDeclined.rawValue {
+            return .permissionDenied
+        }
+        return .captureFailed(error.localizedDescription)
+    }
 }
 
 enum ScreenshotEngine {
@@ -28,7 +44,7 @@ enum ScreenshotEngine {
             content = try await SCShareableContent.excludingDesktopWindows(
                 false, onScreenWindowsOnly: false)
         } catch {
-            throw ScreenshotError.noPermissionOrFailed
+            throw ScreenshotError.classify(error)
         }
 
         var results: [DisplayShot] = []
@@ -50,12 +66,12 @@ enum ScreenshotEngine {
                     contentFilter: filter, configuration: config)
                 results.append(DisplayShot(screen: screen, image: cgImage))
             } catch {
-                throw ScreenshotError.noPermissionOrFailed
+                throw ScreenshotError.classify(error)
             }
         }
 
         if results.isEmpty {
-            throw ScreenshotError.noPermissionOrFailed
+            throw ScreenshotError.noDisplays
         }
         return results
     }

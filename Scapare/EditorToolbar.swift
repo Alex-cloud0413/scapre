@@ -19,6 +19,10 @@ final class EditorToolbar: NSView {
     private var hexColorButton: NSButton?
     private var fontSettingsButton: NSButton?
     private var fontPopover: NSPopover?
+    private let colorPopup = NSPopUpButton()
+    private var undoButton: NSButton?
+    private var redoButton: NSButton?
+    private let colorNames = ["深红", "红色", "橙色", "黄色", "绿色", "蓝色", "紫色", "白色", "黑色"]
 
     private let colors: [NSColor] = [
         NSColor(red: 0.8, green: 0, blue: 0, alpha: 1.0),           // 深红 #CC0000（默认）
@@ -39,7 +43,9 @@ final class EditorToolbar: NSView {
         self.editor = editor
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.backgroundColor = NSColor(white: 0.15, alpha: 0.96).cgColor
+        layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        layer?.borderWidth = 1
+        layer?.borderColor = NSColor.separatorColor.cgColor
         layer?.cornerRadius = 9
         buildUI()
     }
@@ -83,9 +89,13 @@ final class EditorToolbar: NSView {
         stack.addArrangedSubview(separator())
 
         // 颜色
-        for (i, color) in colors.enumerated() {
-            stack.addArrangedSubview(colorButton(color: color, tag: i))
-        }
+        colorPopup.addItems(withTitles: zip(colorNames, colors).map { "\($0) #\($1.hexString)" })
+        colorPopup.addItem(withTitle: "自定义颜色")
+        colorPopup.target = self
+        colorPopup.action = #selector(colorChanged(_:))
+        colorPopup.setAccessibilityLabel("标注颜色")
+        colorPopup.toolTip = "标注颜色"
+        stack.addArrangedSubview(colorPopup)
 
         // 自定义十六进制颜色按钮
         addHexColorButton(to: stack)
@@ -96,8 +106,8 @@ final class EditorToolbar: NSView {
         let seg = NSSegmentedControl(labels: ["细", "中", "粗"],
                                      trackingMode: .selectOne,
                                      target: self, action: #selector(widthChanged(_:)))
-        seg.selectedSegment = 0
-        editor?.setWidth(widths[0])
+        seg.selectedSegment = widths.firstIndex(of: editor?.strokeWidth ?? 2) ?? 0
+        seg.setAccessibilityLabel("线条粗细")
         stack.addArrangedSubview(seg)
 
         // 文字样式下拉按钮（仅文字工具激活时显示）
@@ -110,7 +120,8 @@ final class EditorToolbar: NSView {
         fontBtn.toolTip = "文字样式"
         fontBtn.target = self
         fontBtn.action = #selector(fontSettingsTapped)
-        fontBtn.contentTintColor = .white
+        fontBtn.contentTintColor = .labelColor
+        fontBtn.setAccessibilityLabel("文字样式")
         fontBtn.wantsLayer = true
         fontBtn.layer?.cornerRadius = 5
         fontBtn.isHidden = true
@@ -125,15 +136,20 @@ final class EditorToolbar: NSView {
         stack.addArrangedSubview(separator())
 
         // 撤销
-        stack.addArrangedSubview(actionButton(symbol: "arrow.uturn.backward", tip: "撤销", action: #selector(undoTapped)))
+        let undo = actionButton(symbol: "arrow.uturn.backward", tip: "撤销（⌘Z）", action: #selector(undoTapped))
+        let redo = actionButton(symbol: "arrow.uturn.forward", tip: "重做（⇧⌘Z）", action: #selector(redoTapped))
+        undoButton = undo
+        redoButton = redo
+        stack.addArrangedSubview(undo)
+        stack.addArrangedSubview(redo)
 
         stack.addArrangedSubview(separator())
 
         // 主要操作（统一白色，简约风格）
         stack.addArrangedSubview(actionButton(symbol: "text.viewfinder", tip: "文字识别(OCR)", action: #selector(ocrTapped)))
         stack.addArrangedSubview(actionButton(symbol: "pin.fill", tip: "钉在屏幕上", action: #selector(pinTapped)))
-        stack.addArrangedSubview(actionButton(symbol: "square.and.arrow.down", tip: "保存为图片", action: #selector(saveTapped)))
-        stack.addArrangedSubview(actionButton(symbol: "doc.on.doc", tip: "复制到剪贴板", action: #selector(copyTapped)))
+        stack.addArrangedSubview(actionButton(symbol: "square.and.arrow.down", tip: "保存为图片（⌘S）", action: #selector(saveTapped)))
+        stack.addArrangedSubview(actionButton(symbol: "doc.on.doc", tip: "复制到剪贴板（⌘C）", action: #selector(copyTapped)))
         stack.addArrangedSubview(actionButton(symbol: "xmark", tip: "取消(Esc)", action: #selector(cancelTapped)))
 
         // 根据内容自动确定工具条大小。
@@ -147,11 +163,13 @@ final class EditorToolbar: NSView {
     private func addTool(to stack: NSStackView, tool: AnnotationTool, symbol: String, tip: String) {
         let b = actionButton(symbol: symbol, tip: tip, action: #selector(toolTapped(_:)))
         b.tag = toolButtons.count
+        b.setButtonType(.pushOnPushOff)
+        b.isBordered = true
         toolButtons.append((tool, b))
         stack.addArrangedSubview(b)
     }
 
-    private func actionButton(symbol: String, tip: String, action: Selector, tint: NSColor = .white) -> NSButton {
+    private func actionButton(symbol: String, tip: String, action: Selector, tint: NSColor = .labelColor) -> NSButton {
         let b = NSButton()
         b.image = NSImage(systemSymbolName: symbol, accessibilityDescription: tip)
         b.imageScaling = .scaleProportionallyDown
@@ -159,6 +177,8 @@ final class EditorToolbar: NSView {
         b.bezelStyle = .regularSquare
         b.title = ""
         b.toolTip = tip
+        b.setAccessibilityLabel(tip)
+        b.focusRingType = .default
         b.target = self
         b.action = action
         b.contentTintColor = tint
@@ -172,31 +192,10 @@ final class EditorToolbar: NSView {
         return b
     }
 
-    private func colorButton(color: NSColor, tag: Int) -> NSButton {
-        let b = NSButton()
-        b.title = ""
-        b.isBordered = false
-        b.bezelStyle = .regularSquare
-        b.tag = tag
-        b.target = self
-        b.action = #selector(colorTapped(_:))
-        b.wantsLayer = true
-        b.layer?.backgroundColor = color.cgColor
-        b.layer?.cornerRadius = 9
-        b.layer?.borderColor = NSColor.white.withAlphaComponent(0.6).cgColor
-        b.layer?.borderWidth = 1
-        b.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            b.widthAnchor.constraint(equalToConstant: 18),
-            b.heightAnchor.constraint(equalToConstant: 18),
-        ])
-        return b
-    }
-
     private func separator() -> NSView {
         let v = NSView()
         v.wantsLayer = true
-        v.layer?.backgroundColor = NSColor(white: 1, alpha: 0.2).cgColor
+        v.layer?.backgroundColor = NSColor.separatorColor.cgColor
         v.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             v.widthAnchor.constraint(equalToConstant: 1),
@@ -214,6 +213,7 @@ final class EditorToolbar: NSView {
         b.isBordered = false
         b.bezelStyle = .regularSquare
         b.toolTip = "自定义颜色（输入十六进制值）"
+        b.setAccessibilityLabel("自定义颜色")
         b.target = self
         b.action = #selector(hexColorTapped)
         b.wantsLayer = true
@@ -222,8 +222,8 @@ final class EditorToolbar: NSView {
         b.layer?.borderWidth = 1
         b.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            b.widthAnchor.constraint(equalToConstant: 26),
-            b.heightAnchor.constraint(equalToConstant: 18),
+            b.widthAnchor.constraint(equalToConstant: 30),
+            b.heightAnchor.constraint(equalToConstant: 28),
         ])
         hexColorButton = b
         refreshHexColorButton()
@@ -250,14 +250,32 @@ final class EditorToolbar: NSView {
 
     // MARK: - 高亮当前工具
 
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        layer?.borderColor = NSColor.separatorColor.cgColor
+        refreshToolSelection()
+    }
     func refreshToolSelection() {
         for (tool, button) in toolButtons {
-            let active = (editor?.activeTool == tool)
-            button.layer?.backgroundColor = active
-                ? NSColor.systemBlue.withAlphaComponent(0.9).cgColor
-                : NSColor.clear.cgColor
+            let active = editor?.activeTool == tool
+            button.state = active ? .on : .off
+            button.setAccessibilityValue(active ? "已选择" : "未选择")
+            button.layer?.borderWidth = active ? 2 : 0
+            button.layer?.borderColor = NSColor.labelColor.cgColor
         }
-        fontSettingsButton?.isHidden = (editor?.activeTool != .text)
+        if let color = editor?.strokeColor, colorPopup.numberOfItems > 0 {
+            if let index = colors.firstIndex(where: { $0.hexString == color.hexString }) {
+                colorPopup.selectItem(at: index)
+            } else {
+                colorPopup.item(at: colors.count)?.title = "自定义 #\(color.hexString)"
+                colorPopup.selectItem(at: colors.count)
+            }
+            colorPopup.setAccessibilityValue("#" + color.hexString)
+        }
+        undoButton?.isEnabled = editor?.canUndo ?? false
+        redoButton?.isEnabled = editor?.canRedo ?? false
+        fontSettingsButton?.isHidden = editor?.activeTool != .text
         layoutSubtreeIfNeeded()
         setFrameSize(fittingSize)
     }
@@ -268,13 +286,16 @@ final class EditorToolbar: NSView {
         let tool = toolButtons[sender.tag].tool
         editor?.selectTool(tool)
     }
-    @objc private func colorTapped(_ sender: NSButton) {
-        editor?.setColor(colors[sender.tag])
+    @objc private func colorChanged(_ sender: NSPopUpButton) {
+        let index = sender.indexOfSelectedItem
+        if colors.indices.contains(index) { editor?.setColor(colors[index]) }
+        else { refreshToolSelection(); presentHexColorPanel() }
     }
     @objc private func widthChanged(_ sender: NSSegmentedControl) {
         editor?.setWidth(widths[sender.selectedSegment])
     }
     @objc private func undoTapped() { editor?.undo() }
+    @objc private func redoTapped() { editor?.redo() }
     @objc private func ocrTapped() { editor?.actionOCR() }
     @objc private func pinTapped() { editor?.actionPin() }
     @objc private func saveTapped() { editor?.actionSave() }

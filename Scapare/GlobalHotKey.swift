@@ -20,17 +20,20 @@ final class GlobalHotKey {
     nonisolated(unsafe) private static var nextID: UInt32 = 1
     nonisolated(unsafe) private static var installed = false
 
-    init(keyCode: UInt32, modifiers: UInt32, handler: @escaping () -> Void) {
+    init(keyCode: UInt32, modifiers: UInt32, handler: @escaping () -> Void) throws {
         myID = Self.nextID
         Self.nextID += 1
-        Self.handlers[myID] = handler
-        Self.installHandlerIfNeeded()
+        try Self.installHandlerIfNeeded()
 
         let hotKeyID = EventHotKeyID(signature: OSType(0x534E5054), id: myID) // 'SNPT'
         var ref: EventHotKeyRef?
-        RegisterEventHotKey(keyCode, modifiers, hotKeyID,
+        let status = RegisterEventHotKey(keyCode, modifiers, hotKeyID,
                             GetApplicationEventTarget(), 0, &ref)
+        guard status == noErr, ref != nil else {
+            throw NSError(domain: NSOSStatusErrorDomain, code: Int(status), userInfo: [NSLocalizedDescriptionKey: "这个快捷键无法注册，可能已被其他 App 占用。请换一个组合键。原有快捷键保持不变。"] )
+        }
         hotKeyRef = ref
+        Self.handlers[myID] = handler
     }
 
     deinit {
@@ -41,14 +44,13 @@ final class GlobalHotKey {
     }
 
     // 安装一个统一的事件处理器，负责接收「热键被按下」的系统事件并分发。
-    private static func installHandlerIfNeeded() {
+    private static func installHandlerIfNeeded() throws {
         guard !installed else { return }
-        installed = true
 
         var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
                                  eventKind: UInt32(kEventHotKeyPressed))
 
-        InstallEventHandler(GetApplicationEventTarget(), { (_, event, _) -> OSStatus in
+        let status = InstallEventHandler(GetApplicationEventTarget(), { (_, event, _) -> OSStatus in
             var hkID = EventHotKeyID()
             GetEventParameter(event,
                               EventParamName(kEventParamDirectObject),
@@ -65,6 +67,8 @@ final class GlobalHotKey {
             }
             return noErr
         }, 1, &spec, nil, nil)
+        guard status == noErr else { throw NSError(domain: NSOSStatusErrorDomain, code: Int(status)) }
+        installed = true
     }
 
     @MainActor

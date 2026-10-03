@@ -21,11 +21,11 @@ final class OverlayController {
     let editor: EditorView
     let screen: NSScreen
 
-    init(shot: DisplayShot, controller: CaptureController) {
+    init(shot: DisplayShot, controller: CaptureController, session: EditingSession) {
         screen = shot.screen
         let frame = shot.screen.frame
 
-        editor = EditorView(shot: shot, controller: controller)
+        editor = EditorView(shot: shot, controller: controller, session: session)
         editor.frame = CGRect(origin: .zero, size: frame.size)
 
         window = KeyableWindow(contentRect: frame,

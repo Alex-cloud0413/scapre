@@ -1,102 +1,138 @@
-//
-//  OCRResultWindow.swift
-//  Scapare
-//
-//  文字识别后的结果窗口（参考飞书）：显示识别到的文字，
-//  提供「编辑」(可修正识别错误) 和「复制」两个按钮。
-//
-
 import AppKit
 
 @MainActor
-final class OCRResultController: NSObject, NSWindowDelegate {
-    // 保持对已打开窗口的强引用，否则会被立刻释放。
-    nonisolated(unsafe) private static var alive: [OCRResultController] = []
-
+final class OCRResultController: NSObject, NSWindowDelegate, NSTextViewDelegate {
+    private static var alive: [OCRResultController] = []
     private let window: NSWindow
-    private let textView: NSTextView
-    private let editButton: NSButton
+    private let textView = NSTextView()
+    private let statusLabel = NSTextField(wrappingLabelWithString: "")
+    private let progress = NSProgressIndicator()
+    private let editButton = NSButton(title: "编辑", target: nil, action: nil)
+    private let copyButton = NSButton(title: "复制", target: nil, action: nil)
+    private let retryButton = NSButton(title: "重试", target: nil, action: nil)
+    private let pngData: Data
+    private var task: Task<Void, Never>?
+    private var requestID = UUID()
+    private var state: OCRState = .loading
 
-    static func present(text: String) {
-        let controller = OCRResultController(text: text)
+    static func present(pngData: Data) {
+        let controller = OCRResultController(pngData: pngData)
         alive.append(controller)
         NSApp.activate(ignoringOtherApps: true)
-        controller.window.makeKeyAndOrderFront(nil)
         controller.window.center()
+        controller.window.makeKeyAndOrderFront(nil)
+        controller.startRecognition()
     }
-
-    private init(text: String) {
-        window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 460, height: 360),
-                          styleMask: [.titled, .closable, .resizable],
-                          backing: .buffered,
-                          defer: false)
-        window.title = "文字识别结果"
+    private init(pngData: Data) {
+        self.pngData = pngData
+        window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 480, height: 380),
+                          styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        window.title = "文字识别 · Scapare"
+        window.minSize = NSSize(width: 340, height: 240)
         window.isReleasedWhenClosed = false
-
-        // 文本区（默认只读，点「编辑」后可改）。
+        super.init()
+        window.delegate = self
+        textView.delegate = self
+        textView.isEditable = false
+        textView.isRichText = false
+        textView.isSelectable = true
+        textView.isHorizontallyResizable = false
+        textView.isVerticallyResizable = true
+        textView.autoresizingMask = [.width]
+        textView.font = .systemFont(ofSize: 14)
+        textView.textContainerInset = NSSize(width: 10, height: 10)
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.containerSize = NSSize(width: 440, height: CGFloat.greatestFiniteMagnitude)
+        textView.setAccessibilityLabel("识别出的文字")
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = true
-        scroll.translatesAutoresizingMaskIntoConstraints = false
-
-        textView = NSTextView()
-        textView.string = text.isEmpty ? "（未识别到文字）" : text
-        textView.isEditable = false
-        textView.isSelectable = true
-        textView.font = NSFont.systemFont(ofSize: 14)
-        textView.textContainerInset = NSSize(width: 8, height: 8)
         scroll.documentView = textView
-
-        editButton = NSButton(title: "编辑", target: nil, action: nil)
-        let copyButton = NSButton(title: "复制", target: nil, action: nil)
-        editButton.bezelStyle = .rounded
-        copyButton.bezelStyle = .rounded
-        copyButton.keyEquivalent = "\r"   // 回车 = 复制
-
-        super.init()
-
-        window.delegate = self
-        editButton.target = self
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        progress.style = .spinning
+        progress.controlSize = .small
+        progress.isDisplayedWhenStopped = false
+        statusLabel.textColor = .secondaryLabelColor
+        let statusRow = NSStackView(views: [progress, statusLabel])
+        statusRow.spacing = 8
+        statusRow.translatesAutoresizingMaskIntoConstraints = false
+        for button in [editButton, copyButton, retryButton] { button.bezelStyle = .rounded; button.target = self }
         editButton.action = #selector(toggleEdit)
-        copyButton.target = self
         copyButton.action = #selector(copyText)
-
-        let buttons = NSStackView(views: [editButton, copyButton])
-        buttons.orientation = .horizontal
+        retryButton.action = #selector(startRecognition)
+        copyButton.keyEquivalent = "\r"
+        let close = NSButton(title: "关闭", target: self, action: #selector(closeWindow))
+        close.bezelStyle = .rounded
+        close.keyEquivalent = "\u{1b}"
+        let buttons = NSStackView(views: [close, retryButton, editButton, copyButton])
         buttons.spacing = 10
         buttons.translatesAutoresizingMaskIntoConstraints = false
-
         let content = NSView()
-        content.addSubview(scroll)
-        content.addSubview(buttons)
+        [scroll, statusRow, buttons].forEach { content.addSubview($0) }
         window.contentView = content
-
         NSLayoutConstraint.activate([
-            scroll.topAnchor.constraint(equalTo: content.topAnchor, constant: 14),
-            scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 14),
-            scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -14),
+            statusRow.topAnchor.constraint(equalTo: content.topAnchor, constant: 16),
+            statusRow.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
+            statusRow.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
+            scroll.topAnchor.constraint(equalTo: statusRow.bottomAnchor, constant: 10),
+            scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
+            scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
             scroll.bottomAnchor.constraint(equalTo: buttons.topAnchor, constant: -12),
-
-            buttons.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -14),
-            buttons.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -14),
+            buttons.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
+            buttons.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -16),
         ])
+        render(.loading)
     }
-
-    @objc private func toggleEdit() {
-        let editing = !textView.isEditable
-        textView.isEditable = editing
-        editButton.title = editing ? "完成" : "编辑"
-        if editing {
-            window.makeFirstResponder(textView)
+    @objc private func startRecognition() {
+        task?.cancel()
+        requestID = UUID()
+        let id = requestID
+        let data = pngData
+        render(.loading)
+        task = Task { [weak self] in
+            do {
+                let text = try await OCRService.recognize(pngData: data)
+                guard !Task.isCancelled, self?.requestID == id else { return }
+                self?.render(.recognized(text))
+            } catch {
+                guard !Task.isCancelled, self?.requestID == id else { return }
+                self?.render(.failure(error.localizedDescription))
+            }
         }
     }
-
+    private func render(_ newState: OCRState) {
+        state = newState
+        textView.string = newState.text
+        textView.isEditable = false
+        editButton.title = "编辑"
+        editButton.isEnabled = newState.canCopy
+        copyButton.isEnabled = newState.canCopy
+        retryButton.isHidden = true
+        progress.stopAnimation(nil)
+        switch newState {
+        case .loading: statusLabel.stringValue = "正在识别文字…"; progress.startAnimation(nil)
+        case .result: statusLabel.stringValue = "识别完成，可以编辑后复制。"
+        case .empty: statusLabel.stringValue = "未识别到文字，可以重试或重新截图。"; retryButton.isHidden = false
+        case .failure(let message): statusLabel.stringValue = "识别失败：\(message)"; retryButton.isHidden = false
+        }
+    }
+    @objc private func toggleEdit() {
+        textView.isEditable.toggle()
+        editButton.title = textView.isEditable ? "完成" : "编辑"
+        if textView.isEditable { window.makeFirstResponder(textView) }
+    }
+    func textDidChange(_ notification: Notification) {
+        state = .recognized(textView.string)
+        copyButton.isEnabled = state.canCopy
+    }
     @objc private func copyText() {
-        // 复制文字到剪贴板，并关闭结果窗口。
+        guard state.canCopy else { return }
         Clipboard.copy(text: textView.string)
         window.close()
     }
-
+    @objc private func closeWindow() { window.close() }
     func windowWillClose(_ notification: Notification) {
+        task?.cancel()
+        requestID = UUID()
         Self.alive.removeAll { $0 === self }
     }
 }
