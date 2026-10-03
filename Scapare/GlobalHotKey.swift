@@ -1,6 +1,6 @@
 //
 //  GlobalHotKey.swift
-//  SnapTool
+//  Scapare
 //
 //  用 macOS 底层的 Carbon 接口注册「全局快捷键」。
 //  「全局」的意思是：不管你正在用哪个 App，按下这个键都会触发我们的截图。

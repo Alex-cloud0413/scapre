@@ -1,6 +1,6 @@
 //
 //  SettingsManager.swift
-//  SnapTool
+//  Scapare
 //
 //  通过 UserDefaults 持久化用户偏好设置（快捷键等）。
 //  首次启动无记录时给出默认值（⌘S）。

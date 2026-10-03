@@ -1,6 +1,6 @@
 //
 //  AppDelegate.swift
-//  SnapTool
+//  Scapare
 //
 //  App 启动后：
 //  1. 设为菜单栏小工具（不在程序坞显示）。
@@ -55,7 +55,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = item.button {
-            let image = NSImage(systemSymbolName: "scissors", accessibilityDescription: "Scapre")
+            let image = NSImage(systemSymbolName: "scissors", accessibilityDescription: "Scapare")
             image?.isTemplate = true
             button.image = image
         }
@@ -78,13 +78,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settings.target = self
         menu.addItem(settings)
 
-        let about = NSMenuItem(title: "关于 Scapre",
+        let about = NSMenuItem(title: "关于 Scapare",
                                action: #selector(showAboutAction),
                                keyEquivalent: "")
         about.target = self
         menu.addItem(about)
 
-        let quit = NSMenuItem(title: "退出 Scapre",
+        let quit = NSMenuItem(title: "退出 Scapare",
                               action: #selector(quitAction),
                               keyEquivalent: "q")
         quit.target = self
@@ -131,7 +131,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
         let shortcut = SettingsManager.currentShortcutString
         let alert = NSAlert()
-        alert.messageText = "Scapre"
+        alert.messageText = "Scapare"
         alert.informativeText = """
         一款 Mac 截图小工具。
 

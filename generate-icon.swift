@@ -85,7 +85,7 @@ NSGraphicsContext.restoreGraphicsState()
 
 // ── 输出 ──
 let iconDir = NSString(string: "~").expandingTildeInPath
-    + "/Desktop/SnapTool/SnapTool/Assets.xcassets/AppIcon.appiconset"
+    + "/Desktop/Scapare/Scapare/Assets.xcassets/AppIcon.appiconset"
 
 let pngPath = iconDir + "/icon_1024.png"
 try rep.representation(using: NSBitmapImageRep.FileType.png, properties: [:])?

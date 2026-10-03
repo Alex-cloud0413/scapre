@@ -1,6 +1,6 @@
 //
 //  ScreenshotEngine.swift
-//  SnapTool
+//  Scapare
 //
 //  负责把屏幕「拍」下来，得到一张静止的画面。
 //  我们用苹果官方的 ScreenCaptureKit。第一次使用时，系统会弹窗请求

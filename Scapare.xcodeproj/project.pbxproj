@@ -7,13 +7,13 @@
 	objects = {
 
 /* Begin PBXFileReference section */
-		C6F5EBE12FCE09E9008B63F4 /* SnapTool.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SnapTool.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C6F5EBE12FCE09E9008B63F4 /* Scapare.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Scapare.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		C6F5EBE32FCE09E9008B63F4 /* SnapTool */ = {
+		C6F5EBE32FCE09E9008B63F4 /* Scapare */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = SnapTool;
+			path = Scapare;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -32,7 +32,7 @@
 		C6F5EBD82FCE09E9008B63F4 = {
 			isa = PBXGroup;
 			children = (
-				C6F5EBE32FCE09E9008B63F4 /* SnapTool */,
+				C6F5EBE32FCE09E9008B63F4 /* Scapare */,
 				C6F5EBE22FCE09E9008B63F4 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -40,7 +40,7 @@
 		C6F5EBE22FCE09E9008B63F4 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				C6F5EBE12FCE09E9008B63F4 /* SnapTool.app */,
+				C6F5EBE12FCE09E9008B63F4 /* Scapare.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -48,9 +48,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		C6F5EBE02FCE09E9008B63F4 /* SnapTool */ = {
+		C6F5EBE02FCE09E9008B63F4 /* Scapare */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = C6F5EBEC2FCE09E9008B63F4 /* Build configuration list for PBXNativeTarget "SnapTool" */;
+			buildConfigurationList = C6F5EBEC2FCE09E9008B63F4 /* Build configuration list for PBXNativeTarget "Scapare" */;
 			buildPhases = (
 				C6F5EBDD2FCE09E9008B63F4 /* Sources */,
 				C6F5EBDE2FCE09E9008B63F4 /* Frameworks */,
@@ -61,13 +61,13 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				C6F5EBE32FCE09E9008B63F4 /* SnapTool */,
+				C6F5EBE32FCE09E9008B63F4 /* Scapare */,
 			);
-			name = SnapTool;
+			name = Scapare;
 			packageProductDependencies = (
 			);
-			productName = SnapTool;
-			productReference = C6F5EBE12FCE09E9008B63F4 /* SnapTool.app */;
+			productName = Scapare;
+			productReference = C6F5EBE12FCE09E9008B63F4 /* Scapare.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -85,7 +85,7 @@
 					};
 				};
 			};
-			buildConfigurationList = C6F5EBDC2FCE09E9008B63F4 /* Build configuration list for PBXProject "SnapTool" */;
+			buildConfigurationList = C6F5EBDC2FCE09E9008B63F4 /* Build configuration list for PBXProject "Scapare" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -99,7 +99,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				C6F5EBE02FCE09E9008B63F4 /* SnapTool */,
+				C6F5EBE02FCE09E9008B63F4 /* Scapare */,
 			);
 		};
 /* End PBXProject section */
@@ -248,23 +248,24 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = SnapTool/SnapTool.entitlements;
+				CODE_SIGN_ENTITLEMENTS = Scapare/Scapare.entitlements;
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = 84PC94U6P2;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = Scapre;
+				INFOPLIST_KEY_CFBundleDisplayName = Scapare;
+				INFOPLIST_KEY_CFBundleName = Scapare;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				INFOPLIST_KEY_NSScreenCaptureDescription = "SnapTool uses screen recording to capture screenshots.";
+				INFOPLIST_KEY_NSScreenCaptureDescription = "Scapare uses screen recording to capture screenshots.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -288,23 +289,24 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = SnapTool/SnapTool.entitlements;
+				CODE_SIGN_ENTITLEMENTS = Scapare/Scapare.entitlements;
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = 84PC94U6P2;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = Scapre;
+				INFOPLIST_KEY_CFBundleDisplayName = Scapare;
+				INFOPLIST_KEY_CFBundleName = Scapare;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				INFOPLIST_KEY_NSScreenCaptureDescription = "SnapTool uses screen recording to capture screenshots.";
+				INFOPLIST_KEY_NSScreenCaptureDescription = "Scapare uses screen recording to capture screenshots.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -326,7 +328,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		C6F5EBDC2FCE09E9008B63F4 /* Build configuration list for PBXProject "SnapTool" */ = {
+		C6F5EBDC2FCE09E9008B63F4 /* Build configuration list for PBXProject "Scapare" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				C6F5EBEA2FCE09E9008B63F4 /* Debug */,
@@ -335,7 +337,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		C6F5EBEC2FCE09E9008B63F4 /* Build configuration list for PBXNativeTarget "SnapTool" */ = {
+		C6F5EBEC2FCE09E9008B63F4 /* Build configuration list for PBXNativeTarget "Scapare" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				C6F5EBED2FCE09E9008B63F4 /* Debug */,

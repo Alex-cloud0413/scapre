@@ -1,6 +1,6 @@
 //
 //  SetupWindow.swift
-//  SnapTool
+//  Scapare
 //
 //  首次启动的引导窗 + 后续从菜单打开的设置窗口。
 //  两者复用同一个视图内容。
@@ -49,7 +49,7 @@ final class SetupWindowController: NSObject, NSWindowDelegate {
                           styleMask: [.titled, .closable],
                           backing: .buffered,
                           defer: false)
-        window.title = isFirstRun ? "欢迎使用 Scapre" : "Scapre 设置"
+        window.title = isFirstRun ? "欢迎使用 Scapare" : "Scapare 设置"
         window.isReleasedWhenClosed = false
 
         super.init()
@@ -78,7 +78,7 @@ final class SetupWindowController: NSObject, NSWindowDelegate {
         // 开机自启动复选框（仅首次引导时显示）
         var bottomView: NSView
         if isFirstRun {
-            let cb = NSButton(checkboxWithTitle: "开机时自动启动 Scapre", target: self, action: #selector(launchAtLoginToggled(_:)))
+            let cb = NSButton(checkboxWithTitle: "开机时自动启动 Scapare", target: self, action: #selector(launchAtLoginToggled(_:)))
             cb.state = .on  // 默认勾选
             cb.font = NSFont.systemFont(ofSize: 13)
             cb.translatesAutoresizingMaskIntoConstraints = false
@@ -145,7 +145,7 @@ final class SetupWindowController: NSObject, NSWindowDelegate {
             }
         } catch {
             // 权限不足时静默失败
-            print("SnapTool: SMAppService failed: \(error)")
+            print("Scapare: SMAppService failed: \(error)")
         }
     }
 
@@ -160,7 +160,7 @@ final class SetupWindowController: NSObject, NSWindowDelegate {
                     try SMAppService.mainApp.register()
                 }
             } catch {
-                print("SnapTool: SMAppService register failed: \(error)")
+                print("Scapare: SMAppService register failed: \(error)")
             }
         }
         window.close()

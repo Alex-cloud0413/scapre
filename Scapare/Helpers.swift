@@ -1,6 +1,6 @@
 //
 //  Helpers.swift
-//  SnapTool
+//  Scapare
 //
 //  一些零碎的小帮助函数，被其它文件复用。
 //

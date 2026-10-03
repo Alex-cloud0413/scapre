@@ -1,6 +1,6 @@
 //
 //  CaptureController.swift
-//  SnapTool
+//  Scapare
 //
 //  整个截图流程的「总指挥」。全局只有一个(shared)。
 //  负责：发起截图 → 在每块屏幕铺遮罩 → 接收用户最终的操作(复制/保存/贴图/识别)。

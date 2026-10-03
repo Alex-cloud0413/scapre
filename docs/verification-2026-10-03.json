@@ -1,0 +1,34 @@
+{
+  "date": "2026-10-03",
+  "baseline_commit": "9d669fbd8d1f559b37b1110e8cb9de001dfcae33",
+  "baseline_bundle_restored_and_verified": true,
+  "renamed_swift_files": 17,
+  "swift_behavior_changes": false,
+  "signing_verified": false,
+  "runtime_ui_verified": false,
+  "app_store_current_state_verified": false,
+  "review_evidence": "User-provided App Review text dated 2026-06-10, version 1.0 (1), guideline 2.3.8",
+  "products": {
+    "debug": {
+      "path": "/private/tmp/scapare-debug.Hjr7m9/DerivedData/Build/Products/Debug/Scapare.app",
+      "architectures": "arm64",
+      "CFBundleDisplayName": "Scapare",
+      "CFBundleName": "Scapare",
+      "CFBundleExecutable": "Scapare",
+      "CFBundleIdentifier": "com.gaoyiming.SnapTool",
+      "CFBundleShortVersionString": "1.0",
+      "CFBundleVersion": "2"
+    },
+    "release": {
+      "path": "/private/tmp/scapare-release.ApJYMU/Scapare-build2.xcarchive/Products/Applications/Scapare.app",
+      "architectures": "x86_64 arm64",
+      "CFBundleDisplayName": "Scapare",
+      "CFBundleName": "Scapare",
+      "CFBundleExecutable": "Scapare",
+      "CFBundleIdentifier": "com.gaoyiming.SnapTool",
+      "CFBundleShortVersionString": "1.0",
+      "CFBundleVersion": "2"
+    }
+  },
+  "icon_sha256": "8c73bb025061c38571fd37f0ae2a21341d58de10a182234a59bcf4dabac2d2e4"
+}

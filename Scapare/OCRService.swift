@@ -1,6 +1,6 @@
 //
 //  OCRService.swift
-//  SnapTool
+//  Scapare
 //
 //  文字识别(OCR)。用苹果自带的 Vision 框架，离线识别，支持中英文。
 //

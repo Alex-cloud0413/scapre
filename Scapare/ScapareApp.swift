@@ -1,6 +1,6 @@
 //
-//  SnapToolApp.swift
-//  SnapTool
+//  ScapareApp.swift
+//  Scapare
 //
 //  截图工具的程序入口。它是一个常驻「菜单栏」的小工具：
 //  屏幕顶部菜单栏会出现一把剪刀图标，点开里面有「截图 / 退出」等菜单。
@@ -10,7 +10,7 @@
 import SwiftUI
 
 @main
-struct SnapToolApp: App {
+struct ScapareApp: App {
     // 把 AppKit 的 AppDelegate 接进来，用于注册全局快捷键 ⌘S。
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 

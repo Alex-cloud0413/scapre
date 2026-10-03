@@ -1,6 +1,6 @@
 //
 //  OCRResultWindow.swift
-//  SnapTool
+//  Scapare
 //
 //  文字识别后的结果窗口（参考飞书）：显示识别到的文字，
 //  提供「编辑」(可修正识别错误) 和「复制」两个按钮。
