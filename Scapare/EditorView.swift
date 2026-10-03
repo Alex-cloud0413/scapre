@@ -1086,7 +1086,12 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
         SettingsManager.rememberRegion(selection, displayID: id)
     }
     func actionLongCapture() {
-        guard isLiveCapture, let selection, selection.width >= 32, selection.height >= 64 else { return }
+        guard isLiveCapture else { return }
+        guard let selection, selection.width >= 32, selection.height >= 64 else {
+            setHistoryStatus("选区太小，无法滚动截图。请扩大到至少 32 × 64 点，并避开固定页眉。")
+            return
+        }
+        finishPendingEditing()
         controller?.startLongCapture(on: shot.screen, selection: selection)
     }
     func actionBarcode() { guard let image = renderResult() else { return }; OCRResultController.present(image: image, barcode: true) }

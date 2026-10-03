@@ -95,7 +95,7 @@ enum ScreenshotEngine {
 }
 
 @MainActor
-final class RegionCaptureSource {
+final class RegionCaptureSource: ScrollingCaptureSource {
     private let filter: SCContentFilter
     private let config: SCStreamConfiguration
     private let displayID: CGDirectDisplayID

@@ -290,6 +290,139 @@ struct RegressionTests {
         let richAnnotation = try JSONDecoder().decode(Annotation.self, from: JSONEncoder().encode(styled))
         check(richAnnotation.fontName == "Helvetica" && richAnnotation.textOutlineColor == "123456" && richAnnotation.arrowStyle == 1, "Backup preserves custom fonts, outline colors and arrow styles")
 
+        // Exercise the real AppKit target/action chain with synthetic source images.
+        // Never captures the desktop, posts input events, or touches the clipboard.
+        _ = NSApplication.shared
+        guard let screen = NSScreen.screens.first else { throw NSError(domain: "Scapare.Tests", code: 1, userInfo: [NSLocalizedDescriptionKey: "AppKit regression checks require access to the macOS window server."]) }
+        let editorSession = EditingSession()
+        var requestedRegion: CGRect?
+        let capture = CaptureController(beginScrollingCapture: { _, rect, finished in
+            requestedRegion = rect
+            finished()
+        })
+        let editor = EditorView(shot: DisplayShot(screen: screen, image: frame1.image()!),
+                                controller: capture, session: editorSession, canvasSize: CGSize(width: 1200, height: 800))
+        editor.setSelection(CGRect(x: 100, y: 160, width: 360, height: 240))
+        func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        let toolbar = descendants(editor).compactMap { $0 as? EditorToolbar }.first!
+        let scrollButton = descendants(toolbar).compactMap { $0 as? NSButton }.first { $0.identifier?.rawValue == "scrolling-capture" }!
+        scrollButton.performClick(nil)
+        check(requestedRegion == editorSession.snapshot.selection, "Toolbar click dispatches the selected region into scrolling capture")
+        requestedRegion = nil
+        editor.setSelection(CGRect(x: 100, y: 160, width: 10, height: 20))
+        scrollButton.performClick(nil)
+        check(requestedRegion == nil && descendants(editor).compactMap { $0 as? NSTextField }.contains { $0.stringValue.contains("选区太小") },
+              "Small scroll selections show actionable feedback instead of failing silently")
+        let testWindow = NSWindow(contentRect: editor.bounds, styleMask: .borderless, backing: .buffered, defer: false)
+        testWindow.isReleasedWhenClosed = false
+        testWindow.contentView = editor
+        editor.setSelection(CGRect(x: 100, y: 160, width: 360, height: 240))
+        editor.setHistoryStatus("框选后选择工具；鼠标悬停可查看功能")
+        testWindow.contentView?.layoutSubtreeIfNeeded()
+        toolbar.layoutSubtreeIfNeeded()
+        let hoverPoint = scrollButton.convert(CGPoint(x: scrollButton.bounds.midX, y: scrollButton.bounds.midY), to: nil)
+        let hoverEvent = NSEvent.mouseEvent(with: .mouseMoved, location: hoverPoint, modifierFlags: [], timestamp: 0,
+            windowNumber: testWindow.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0)!
+        toolbar.mouseMoved(with: hoverEvent)
+        check(editor.subviews.compactMap { $0 as? ToolbarHelpBubble }.contains { $0.label.stringValue.contains("滚动截图") },
+              "Real toolbar hover routing shows the function hint above the editor")
+        if let renderPath = ProcessInfo.processInfo.environment["SCAPARE_TEST_RENDER_DIR"] {
+            let folder = URL(fileURLWithPath: renderPath)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let rect = editor.bounds
+            if let bitmap = editor.bitmapImageRepForCachingDisplay(in: rect) {
+                editor.cacheDisplay(in: rect, to: bitmap)
+                try bitmap.representation(using: .png, properties: [:])?.write(to: folder.appendingPathComponent("toolbar-hover.png"))
+            }
+        }
+        toolbar.mouseExited(with: hoverEvent)
+        check(!editor.subviews.contains { $0 is ToolbarHelpBubble }, "Toolbar mouse exit removes the displayed hint")
+        let buttons = descendants(toolbar).compactMap { $0 as? NSControl }.filter { $0 is NSButton || $0 is NSSegmentedControl }
+        check(!buttons.isEmpty && buttons.allSatisfy { !($0.toolTip ?? "").isEmpty }, "Every toolbar button, menu and width selector has a function hint")
+
+        let host = NSView(frame: CGRect(x: 0, y: 0, width: 800, height: 600))
+        let clippingScroll = NSScrollView(frame: CGRect(x: 200, y: 20, width: 400, height: 44))
+        let document = NSView(frame: CGRect(x: 0, y: 0, width: 1000, height: 44))
+        let control = NSButton(frame: CGRect(x: 240, y: 8, width: 30, height: 28))
+        document.addSubview(control)
+        clippingScroll.documentView = document
+        host.addSubview(clippingScroll)
+        clippingScroll.contentView.scroll(to: CGPoint(x: 200, y: 0))
+        let help = ToolbarHoverHelp()
+        help.show("滚动截图", for: control, in: host)
+        check(help.bubble.superview === host && host.bounds.contains(help.bubble.frame), "Hover help escapes toolbar clipping and stays within the capture window")
+        check(help.bubble.hitTest(help.bubble.frame.origin) == nil, "Hover help does not intercept mouse input")
+        control.frame.origin.y = 560
+        host.addSubview(control)
+        help.show("顶部提示", for: control, in: host)
+        check(host.bounds.contains(help.bubble.frame), "Hover help remains visible near the top edge")
+        help.hide()
+        check(help.bubble.superview == nil, "Hover exit removes the hint")
+        check(ScrollMatcher.isUnchanged(frame1, frame1) && !ScrollMatcher.isUnchanged(frame1, frame2), "Stable-frame check distinguishes still content from scrolling")
+        let fullSizePreview = try PixelRaster(stitcher.preview(maxSize: CGSize(width: 96, height: 420))!)
+        check(fullSizePreview.bytes == stitched.bytes, "Live preview preserves the exact top-to-bottom order of stitched strips")
+        let smallPreview = stitcher.preview(maxSize: CGSize(width: 80, height: 120))!
+        check(smallPreview.width <= 80 && smallPreview.height <= 120, "Live preview uses bounded thumbnail dimensions")
+        let visible = CGRect(x: -1200, y: -100, width: 1200, height: 800)
+        let region = CGRect(x: -1100, y: 100, width: 400, height: 400)
+        let panelSize = CGSize(width: 440, height: 262)
+        let origin = ScrollCaptureLayout.panelOrigin(size: panelSize, region: region, visibleFrame: visible)
+        check(visible.contains(CGRect(origin: origin, size: panelSize)) && !region.intersects(CGRect(origin: origin, size: panelSize)),
+              "Scroll controls avoid the selected region on an offset secondary display")
+        let fullOrigin = ScrollCaptureLayout.panelOrigin(size: panelSize, region: visible, visibleFrame: visible)
+        check(visible.contains(CGRect(origin: fullOrigin, size: panelSize)), "Full-screen selections keep scroll controls reachable")
+
+        final class SyntheticScrollSource: ScrollingCaptureSource {
+            let images: [CGImage]
+            var count = 0
+            var fails = false
+            init(_ images: [CGImage]) { self.images = images }
+            func capture() async throws -> CGImage {
+                count += 1
+                if fails { throw Failure.occupied }
+                return images[min(count - 1, images.count - 1)]
+            }
+        }
+        let synthetic = SyntheticScrollSource([frame1, frame2, frame2, frame3, frame3].map { $0.image()! })
+        var closeCount = 0
+        var finishedImage: CGImage?
+        let scrolling = ScrollingCaptureController(screen: screen, selection: CGRect(x: 20, y: 40, width: 96, height: 240),
+            onClose: { closeCount += 1 }, makeSource: { synthetic }, onFinish: { finishedImage = $0 })
+        check(!scrolling.panel.hidesOnDeactivate && !scrolling.regionOutline.hidesOnDeactivate && scrolling.regionOutline.ignoresMouseEvents,
+              "Scroll controls survive app deactivation and the region outline passes input through")
+        scrolling.run()
+        for _ in 0..<150 {
+            if descendants(scrolling.panel.contentView!).compactMap({ $0 as? NSTextField }).contains(where: { $0.stringValue.contains("3 帧") }) { break }
+            try await Task.sleep(for: .milliseconds(30))
+        }
+        check(scrolling.finishButton.isEnabled && synthetic.count >= 5, "Scroll capture becomes ready and consumes settled synthetic frames")
+        if let renderPath = ProcessInfo.processInfo.environment["SCAPARE_TEST_RENDER_DIR"], let content = scrolling.panel.contentView {
+            content.layoutSubtreeIfNeeded()
+            if let bitmap = content.bitmapImageRepForCachingDisplay(in: content.bounds) {
+                content.cacheDisplay(in: content.bounds, to: bitmap)
+                try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: renderPath).appendingPathComponent("scroll-panel.png"))
+            }
+        }
+        check(scrolling.panel.contentView!.frame.size == CGSize(width: 440, height: 240), "Live preview cannot enlarge the control panel off-screen")
+        scrolling.finishButton.performClick(nil)
+        let completed = try finishedImage.map(PixelRaster.init)
+        check(completed?.bytes == stitched.bytes && closeCount == 1, "Finish button returns the stitched image and closes the capture exactly once")
+        scrolling.close()
+        check(closeCount == 1, "Repeated close cannot deliver a second completion")
+        let failing = SyntheticScrollSource([frame1.image()!]); failing.fails = true
+        var failedClosed = false
+        let failedScrolling = ScrollingCaptureController(screen: screen, selection: CGRect(x: 0, y: 0, width: 96, height: 240),
+            onClose: { failedClosed = true }, makeSource: { failing })
+        failedScrolling.run()
+        for _ in 0..<100 {
+            if failedScrolling.status.stringValue.contains("捕获已停止") { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        check(failedScrolling.status.stringValue.contains("捕获已停止") && !failedScrolling.finishButton.isEnabled,
+              "Initial capture failure remains visible without enabling an empty result")
+        failedScrolling.close()
+        check(failedClosed, "Failed capture can close and release the capture session")
+
         let socketDirectory = URL(fileURLWithPath: "/private/tmp/sc-ipc-" + String(UUID().uuidString.prefix(8)))
         defer { try? FileManager.default.removeItem(at: socketDirectory) }
         let socketPath = socketDirectory.appendingPathComponent("socket").path

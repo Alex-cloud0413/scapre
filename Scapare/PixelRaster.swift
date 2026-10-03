@@ -61,6 +61,21 @@ nonisolated enum ImageError: LocalizedError {
 nonisolated enum ScrollMatch: Equatable { case unchanged, advance(Int) }
 
 nonisolated enum ScrollMatcher {
+    /// A bounded stationary check keeps live feedback responsive while scrolling.
+    static func isUnchanged(_ previous: PixelRaster, _ next: PixelRaster) -> Bool {
+        guard previous.width == next.width, previous.height == next.height,
+              previous.width >= 32, previous.height >= 64 else { return false }
+        let w = previous.width, h = previous.height
+        var total = 0
+        for row in 0..<48 {
+            let y = row * (h - 1) / 47
+            for column in 0..<32 {
+                let x = min(w - 1, w / 20 + column * (w * 9 / 10) / 32)
+                total += abs(previous.luminance(x, y) - next.luminance(x, y))
+            }
+        }
+        return Double(total) / (48 * 32) < 0.7
+    }
     /// Compare texture across the width and several overlap rows. Never append on an ambiguous match.
     static func match(_ previous: PixelRaster, _ next: PixelRaster) throws -> ScrollMatch {
         guard previous.width == next.width, previous.height == next.height else { throw ImageError.incompatible }
@@ -122,6 +137,25 @@ nonisolated struct ScrollStitcher: Sendable {
     }
     func image() -> CGImage? {
         PixelRaster(width: previous.width, height: height, bytes: strips.flatMap(\.bytes)).image()
+    }
+    /// Draw strips directly into a small thumbnail instead of allocating a second
+    /// full-resolution long image on every scroll update.
+    func preview(maxSize: CGSize) -> CGImage? {
+        let scale = min(1, maxSize.width / CGFloat(previous.width), maxSize.height / CGFloat(height))
+        let w = max(1, Int(CGFloat(previous.width) * scale)), h = max(1, Int(CGFloat(height) * scale))
+        guard let context = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        context.interpolationQuality = .high
+        var top = 0
+        for strip in strips {
+            guard let image = strip.image() else { return nil }
+            let bottom = top + strip.height
+            let y0 = CGFloat(height - bottom) * CGFloat(h) / CGFloat(height)
+            let y1 = CGFloat(height - top) * CGFloat(h) / CGFloat(height)
+            context.draw(image, in: CGRect(x: 0, y: y0, width: CGFloat(w), height: y1 - y0))
+            top = bottom
+        }
+        return context.makeImage()
     }
 }
 

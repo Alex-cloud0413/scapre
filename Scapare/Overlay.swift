@@ -40,6 +40,7 @@ final class OverlayController {
         window.level = NSWindow.Level(rawValue: Int(CGShieldingWindowLevel()))
         window.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
         window.ignoresMouseEvents = false
+        window.acceptsMouseMovedEvents = true
     }
 
     func show() {

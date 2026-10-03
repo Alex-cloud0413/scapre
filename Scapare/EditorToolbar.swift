@@ -18,6 +18,8 @@ final class EditorToolbar: NSView {
     private let colorPopup = OpacityColorPopup()
     private var undoButton: NSButton?
     private var redoButton: NSButton?
+    private let hoverHelp = ToolbarHoverHelp()
+    private var hoverTrackingArea: NSTrackingArea?
     private let colors = AppearanceSettings.options.palette.compactMap(NSColor.init(hex:))
     private var colorNames: [String] { colors.indices.map { "色板 \($0 + 1)" } }
     private let widths: [CGFloat] = [1, 2, 4, 8, 12]
@@ -43,6 +45,37 @@ final class EditorToolbar: NSView {
         return v == self ? self : v
     }
     override func mouseDown(with event: NSEvent) { /* 吞掉，避免穿透到底层视图 */ }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTrackingArea { removeTrackingArea(hoverTrackingArea) }
+        let area = NSTrackingArea(rect: .zero, options: [.inVisibleRect, .activeAlways, .mouseMoved, .mouseEnteredAndExited], owner: self)
+        addTrackingArea(area)
+        hoverTrackingArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) { updateHelp(with: event) }
+    override func mouseMoved(with event: NSEvent) { updateHelp(with: event) }
+    override func mouseExited(with event: NSEvent) { hoverHelp.hide() }
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        hoverHelp.hide()
+        super.viewWillMove(toWindow: newWindow)
+    }
+    private func updateHelp(with event: NSEvent) {
+        guard let host = window?.contentView else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        guard visibleRect.contains(point) else { hoverHelp.hide(); return }
+        // The document view may be horizontally scrolled: hitTest takes parent coordinates.
+        var view = hitTest(convert(point, to: superview))
+        while let candidate = view, candidate !== self {
+            if let tip = candidate.toolTip, !tip.isEmpty {
+                hoverHelp.show(tip, for: candidate, in: host)
+                return
+            }
+            view = candidate.superview
+        }
+        hoverHelp.hide()
+    }
 
     // 鼠标移到工具条上时恢复成正常的箭头(而不是截图用的十字)。
     override func resetCursorRects() {
@@ -73,6 +106,8 @@ final class EditorToolbar: NSView {
 
         let more = NSPopUpButton(frame: .zero, pullsDown: true)
         more.addItem(withTitle: "更多工具")
+        more.toolTip = "更多标注工具与样式"
+        more.setAccessibilityLabel("更多标注工具与样式")
         for tool in AnnotationTool.allCases {
             let item = NSMenuItem(title: tool.title, action: #selector(extraToolTapped(_:)), keyEquivalent: "")
             item.target = self; item.representedObject = tool.rawValue; more.menu?.addItem(item)
@@ -89,7 +124,7 @@ final class EditorToolbar: NSView {
         colorPopup.target = self
         colorPopup.action = #selector(colorChanged(_:))
         colorPopup.setAccessibilityLabel("标注颜色")
-        colorPopup.toolTip = "标注颜色"
+        colorPopup.toolTip = "标注颜色（滚轮调整透明度）"
         stack.addArrangedSubview(colorPopup)
 
         // 自定义十六进制颜色按钮
@@ -103,6 +138,7 @@ final class EditorToolbar: NSView {
                                      target: self, action: #selector(widthChanged(_:)))
         seg.selectedSegment = widths.firstIndex(of: editor?.strokeWidth ?? 2) ?? 0
         seg.setAccessibilityLabel("线条粗细")
+        seg.toolTip = "线条粗细（像素）"
         stack.addArrangedSubview(seg)
 
         // 文字样式下拉按钮（仅文字工具激活时显示）
@@ -141,7 +177,9 @@ final class EditorToolbar: NSView {
         stack.addArrangedSubview(separator())
 
         if editor?.isLiveCapture == true {
-            stack.addArrangedSubview(actionButton(symbol: "arrow.down.to.line.compact", tip: "滚动长截图", action: #selector(longCaptureTapped)))
+            let button = actionButton(symbol: "arrow.down.to.line.compact", tip: "滚动截图（在选区内向下滚动，自动拼接）", action: #selector(longCaptureTapped))
+            button.identifier = NSUserInterfaceItemIdentifier("scrolling-capture")
+            stack.addArrangedSubview(button)
         }
         // 主要操作
         stack.addArrangedSubview(actionButton(symbol: "text.viewfinder", tip: "文字识别(OCR)", action: #selector(ocrTapped)))
@@ -289,7 +327,7 @@ final class EditorToolbar: NSView {
         if let raw = sender.representedObject as? String, let tool = AnnotationTool(rawValue: raw) { editor?.selectTool(tool) }
     }
     @objc private func styleTapped() { editor?.showStyleOptions() }
-    @objc private func longCaptureTapped() { editor?.actionLongCapture() }
+    @objc private func longCaptureTapped() { hoverHelp.hide(); editor?.actionLongCapture() }
     @objc private func toolTapped(_ sender: NSButton) {
         let tool = toolButtons[sender.tag].tool
         editor?.selectTool(tool)

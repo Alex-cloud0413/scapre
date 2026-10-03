@@ -21,7 +21,12 @@ final class CaptureController {
     private var sourceApplication: NSRunningApplication?
     private var captureDelay: Task<Void, Never>?
     private var history = BoundedHistory<CaptureEntry>(capacity: 6)
-    private init() {}
+    private let beginScrollingCapture: @MainActor (NSScreen, CGRect, @escaping () -> Void) -> Void
+    init(beginScrollingCapture: @escaping @MainActor (NSScreen, CGRect, @escaping () -> Void) -> Void = {
+        ScrollingCaptureController.start(screen: $0, selection: $1, onClose: $2)
+    }) {
+        self.beginScrollingCapture = beginScrollingCapture
+    }
 
     enum Mode { case region, fullScreen, activeWindow, repeatRegion, long }
     func startCapture(mode: Mode = .region) {
@@ -124,10 +129,8 @@ final class CaptureController {
         OCRResultController.present(pngData: data)
     }
     func startLongCapture(on screen: NSScreen, selection: CGRect) {
-        let app = sourceApplication
         dismissOverlays(); isCapturing = true
-        app?.activate(options: [])
-        ScrollingCaptureController.start(screen: screen, selection: selection) { [weak self] in self?.isCapturing = false }
+        beginScrollingCapture(screen, selection) { [weak self] in self?.isCapturing = false }
     }
     func delayedCapture(seconds: Int) {
         captureDelay?.cancel()
