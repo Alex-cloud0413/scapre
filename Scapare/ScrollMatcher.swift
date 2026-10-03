@@ -20,6 +20,10 @@ nonisolated struct ScrollFeatures: Sendable {
                 let value = (raster.luminance(x - 1, y) + 2 * raster.luminance(x, y) + raster.luminance(x + 1, y)) / 4
                 values[y * Self.columns + c] = Int16(value)
                 if c > 0 { energy[y] += abs(value - Int(values[y * Self.columns + c - 1])) }
+                // Window borders and shadows are often uniform across a row.
+                // Their vertical gradient is texture too; otherwise a stationary
+                // gray footer is appended for every document movement.
+                if y > 0 { energy[y] += abs(value - Int(values[(y - 1) * Self.columns + c])) }
             }
         }
         self.values = values

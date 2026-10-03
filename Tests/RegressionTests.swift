@@ -266,6 +266,58 @@ struct RegressionTests {
         let stickyExpected = stickyHeader.bytes + textDocument.rows(0..<(650 + viewportHeight - 84)).bytes + stickyFooter.bytes
         try check(try PixelRaster(sticky.image()!).bytes == stickyExpected, "Fixed headers and footers appear once rather than at every join")
 
+        // A selection around a browser window includes its bottom border/shadow.
+        // These rows have vertical gradients but no horizontal text or noise.
+        // They must be retained once, outside the appended document strips.
+        func windowEdge(width: Int, height: Int) -> PixelRaster {
+            var bytes = [UInt8](repeating: 255, count: width * height * 4)
+            for y in 0..<height { for x in 0..<width {
+                let i = (y * width + x) * 4
+                let value = UInt8(90 + 150 * y / max(1, height - 1))
+                bytes[i] = value; bytes[i+1] = value; bytes[i+2] = value
+            } }
+            return PixelRaster(width: width, height: height, bytes: bytes)
+        }
+        let shadowFooter = windowEdge(width: 1280, height: 44)
+        func shadowFrame(_ offset: Int) -> PixelRaster {
+            PixelRaster(width: 1280, height: viewportHeight,
+                bytes: stickyHeader.bytes + textDocument.rows(offset..<(offset + viewportHeight - 92)).bytes + shadowFooter.bytes)
+        }
+        check(ScrollMatcher.fixedEdges(ScrollFeatures(shadowFrame(0)), ScrollFeatures(shadowFrame(3))).bottom == 44,
+              "The fixed shadow extent excludes adjacent white document rows")
+        var windowCapture = ScrollStitcher(first: shadowFrame(0))
+        var everyWindowFrameIsExact = true
+        for offset in [3, 8, 19, 45, 82, 143, 245, 410, 680, 1070, 1610] {
+            _ = try windowCapture.append(shadowFrame(offset))
+            let expected = stickyHeader.bytes + textDocument.rows(0..<(offset + viewportHeight - 92)).bytes + shadowFooter.bytes
+            let actual = try PixelRaster(windowCapture.image()!)
+            everyWindowFrameIsExact = everyWindowFrameIsExact && actual.bytes == expected
+        }
+        let windowExpected = stickyHeader.bytes + textDocument.rows(0..<(1610 + viewportHeight - 92)).bytes + shadowFooter.bytes
+        try check(everyWindowFrameIsExact && (try PixelRaster(windowCapture.image()!).bytes == windowExpected),
+              "A browser's uniform bottom border and shadow appear exactly once without repeated gray strips")
+        for offset in [1450, 1300, 1500, 1610, 1740] { _ = try windowCapture.append(shadowFrame(offset)) }
+        try check(try PixelRaster(windowCapture.image()!).bytes == stickyHeader.bytes
+                  + textDocument.rows(0..<(1740 + viewportHeight - 92)).bytes + shadowFooter.bytes,
+              "Scrolling back and forward retains the window shadow once and preserves all new document rows")
+
+        var marginDocument = textDocument
+        for rows in [0..<128, (viewportHeight - 128)..<(viewportHeight + 128)] {
+            marginDocument.bytes.replaceSubrange((rows.lowerBound * 1280 * 4)..<(rows.upperBound * 1280 * 4),
+                with: [UInt8](repeating: 255, count: rows.count * 1280 * 4))
+        }
+        let marginFirst = marginDocument.rows(0..<viewportHeight)
+        let marginNext = marginDocument.rows(3..<(viewportHeight + 3))
+        let marginEdges = ScrollMatcher.fixedEdges(ScrollFeatures(marginFirst), ScrollFeatures(marginNext))
+        check(marginEdges.top == 0 && marginEdges.bottom == 0,
+              "Stationary-looking white document margins are not classified as fixed window edges")
+        var marginCapture = ScrollStitcher(first: marginFirst)
+        for offset in [3, 19, 82, 143, 245, 410, 680, 850, 1070, 1350, 1610] {
+            _ = try marginCapture.append(marginDocument.rows(offset..<(offset + viewportHeight)))
+        }
+        try check(try PixelRaster(marginCapture.image()!).bytes == marginDocument.rows(0..<(1610 + viewportHeight)).bytes,
+              "Real white document margins retain every source row after continuous scrolling")
+
         // A browser selection can contain a moving feed alongside a stationary
         // sidebar. Those stationary edges must not veto the document movement.
         let sidebar = try documentPage(width: 1280, height: viewportHeight, table: true)
