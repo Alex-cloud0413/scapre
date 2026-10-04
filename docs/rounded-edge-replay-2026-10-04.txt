@@ -1,0 +1,13 @@
+REAL_ATTACHMENT_EDGE_DEPTH (top: 420, bottom: 49)
+PASS: Actual attachment edge pixels with controlled scrolling, offset 3
+PASS: Actual attachment edge pixels with controlled scrolling, offset 8
+PASS: Actual attachment edge pixels with controlled scrolling, offset 19
+PASS: Actual attachment edge pixels with controlled scrolling, offset 45
+PASS: Actual attachment edge pixels with controlled scrolling, offset 82
+PASS: Actual attachment edge pixels with controlled scrolling, offset 143
+PASS: Actual attachment edge pixels with controlled scrolling, offset 245
+PASS: Actual attachment edge pixels with controlled scrolling, offset 410
+PASS: Actual attachment edge pixels with controlled scrolling, offset 680
+PASS: Actual attachment edge pixels with controlled scrolling, offset 1070
+PASS: Actual attachment edge pixels with controlled scrolling, offset 1610
+PASS: Actual attachment edge replay remains intact during reverse scrolling

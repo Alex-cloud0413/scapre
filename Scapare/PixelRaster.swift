@@ -69,6 +69,7 @@ nonisolated struct ScrollStitcher: Sendable {
     private var didSetFixedEdges = false
     private var fixedTop = 0
     private var fixedBottom = 0
+    private var footerHeight = 0
     private var footer: PixelRaster?
     private(set) var height: Int
     private(set) var frameCount = 1
@@ -80,10 +81,13 @@ nonisolated struct ScrollStitcher: Sendable {
     mutating func append(_ next: PixelRaster) throws -> Bool {
         let nextFeatures = ScrollFeatures(next)
         guard next.width == previous.width, next.height == previous.height else { throw ImageError.incompatible }
-        var top = fixedTop, bottom = fixedBottom
+        var top = fixedTop, bottom = fixedBottom, outputBottom = footerHeight
         if !didSetFixedEdges, !ScrollMatcher.isUnchanged(previous, next) {
             let edges = ScrollMatcher.fixedEdges(features, nextFeatures)
             top = edges.top; bottom = edges.bottom
+            // Partial-width decorations belong to the output footer, but the
+            // moving text between them remains valid evidence for alignment.
+            outputBottom = ScrollMatcher.fixedEdges(previous, next, previousFeatures: features, nextFeatures: nextFeatures).bottom
         }
         let nextPosition: Double
         var recovered = false
@@ -113,12 +117,22 @@ nonisolated struct ScrollStitcher: Sendable {
         let shift = nextPosition - position
         guard shift != 0 else { return false }
         let newRows = max(0, Int(nextPosition.rounded()) - furthestPosition)
+        guard newRows <= next.height - top - outputBottom else { throw ImageError.noOverlap }
         guard height + newRows <= maxHeight, (height + newRows) * next.width <= 60_000_000 else { throw ImageError.tooLarge }
         // A fixed footer belongs once, at the end, rather than in every new strip.
-        if !didSetFixedEdges, bottom > 0 { strips = [strips[0].rows(0..<(previous.height - bottom))] }
+        if !didSetFixedEdges, outputBottom > 0 {
+            let first = strips[0]
+            strips = [first.rows(0..<(previous.height - outputBottom))]
+            footer = first.rows((first.height - outputBottom)..<first.height)
+        }
         didSetFixedEdges = true
         fixedTop = top; fixedBottom = bottom
-        if bottom > 0 { footer = next.rows((next.height - bottom)..<next.height) }
+        footerHeight = outputBottom
+        // A reserved footer can contain moving text between fixed corners.
+        // Keep it from the furthest captured position when the user backscrolls.
+        if outputBottom > 0, Int(nextPosition.rounded()) >= furthestPosition {
+            footer = next.rows((next.height - outputBottom)..<next.height)
+        }
         // Match against a keyframe for many updates, instead of rounding and
         // accumulating a new displacement on every fractional scrolling frame.
         if recovered || abs(shift) >= Double(max(16, next.height / 3)) {
@@ -127,7 +141,7 @@ nonisolated struct ScrollStitcher: Sendable {
         recent = (next, nextFeatures, nextPosition)
         if recovered { recoveredMatches += 1 }
         guard newRows > 0 else { return false }
-        strips.append(next.rows((next.height - bottom - newRows)..<(next.height - bottom)))
+        strips.append(next.rows((next.height - outputBottom - newRows)..<(next.height - outputBottom)))
         furthestPosition = Int(nextPosition.rounded())
         height += newRows; frameCount += 1
         return true

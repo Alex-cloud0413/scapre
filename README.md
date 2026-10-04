@@ -36,7 +36,7 @@ scripts/test.sh
 
 Bundle ID 保留 `com.gaoyiming.SnapTool`，用于继续已有 App Store Connect 记录和本地偏好设置身份。它不是面向用户的产品名称。Apple 规定，上传过构建后不能在原有 App 记录中更改 Bundle ID。
 
-当前本机修复版为 1.1.5（构建 10），改进长截图参考画面的衔接、留白验证和小数像素位移，加入 Vision 备用对齐。191 项回归检查通过，含 30 组内容与滚动节奏场景；没有足够可识别重叠时仍需回滚恢复。原页面实机效果需用户复测。本轮未更新 App Store Connect，最近提交记录为 1.1.3（构建 8）。Bundle ID 继续沿用原 App Store 记录。详见[开源调研与修复记录](docs/scroll-capture-research-2026-10-04.md)和[已提交版本记录](docs/appstore-release-2026-10-04.md)。
+当前本机修复版为 1.1.6（构建 11），补上窗口两侧及内部侧栏圆角的识别，避免固定边缘随每一帧重复追加；回滚时保留长图原有末尾正文。233 项回归检查通过，并使用用户附件的真实边缘配合可控正文重放验证。原页面实机效果需用户复测。本轮未更新 App Store Connect，最近提交记录为 1.1.3（构建 8）。Bundle ID 继续沿用原 App Store 记录。详见[圆角修复记录](docs/rounded-window-edges-2026-10-04.md)、[上一版开源调研](docs/scroll-capture-research-2026-10-04.md)和[已提交版本记录](docs/appstore-release-2026-10-04.md)。
 
 ## 当前文档
 
