@@ -1,0 +1,195 @@
+PASS: All F1–F12 work without modifiers
+PASS: Unmodified letters are rejected
+PASS: Escape remains a cancellation key
+PASS: Modifier-only input is rejected
+PASS: Modified letters are accepted
+PASS: Conflict keeps the working binding and saved settings
+PASS: Re-selecting the current shortcut is a no-op
+PASS: Successful registration commits the new shortcut
+PASS: First launch initializes a shortcut without completing onboarding
+PASS: Changing the shortcut preserves incomplete onboarding across launches
+PASS: Completed onboarding remains complete
+PASS: Existing users retain their shortcut during onboarding migration
+PASS: Undo removes the last annotation without losing the selection
+PASS: Redo restores the exact annotation
+PASS: History navigation preserves the edited session
+PASS: Each history entry has isolated undo state
+PASS: Undo and redo survive switching away and back
+PASS: History boundary does not mutate the active entry
+PASS: History retention stays bounded to six captures
+PASS: A new edit after undo discards stale redo
+PASS: Cancelling the save panel never writes or reports success
+PASS: Write failure surfaces once and returns to editing
+PASS: Retry writes the original image bytes successfully
+PASS: Loading, empty and failed OCR cannot copy placeholders
+PASS: Whitespace-only OCR is treated as empty
+PASS: OCR preserves meaningful multiline text
+PASS: Invalid OCR input produces an error rather than an empty success
+PASS: Permission denial is classified separately
+PASS: Unrelated capture failure does not request permissions
+PASS: Retina size uses the same integral pixel bounds as export
+PASS: Non-Retina crops preserve one pixel per point
+PASS: Text resize hit region matches the lower-right visual handle
+PASS: Annotation rendering preserves the exact source crop resolution
+PASS: Compositing retains the screenshot background
+PASS: Annotations align with the cropped source pixels on Retina
+PASS: Final PNG encoding preserves the dimensions shown in the selection label
+PASS: Pixel normalization preserves row order and colors
+PASS: Stationary long-capture frames are ignored
+PASS: Long capture finds an exact vertical overlap
+PASS: Three scrolling frames stitch into the exact original pixels without duplicate rows
+PASS: Excessive scroll leaves the completed long capture intact
+PASS: Reverse scrolling is not silently appended
+PASS: Long capture enforces its length limit without losing previous frames
+PASS: Repeated patterns are rejected instead of producing a guessed seam
+PASS: Long capture rejects changed viewport dimensions
+PASS: Natural and fast continuous text scrolling produces exact pixels without gaps or overlap
+BENCHMARK: 1280 × 1200 text frames, 15 matches in 0.135370542 seconds
+PASS: Scrolling backward and forward appends only content beyond the previous endpoint
+PASS: Small continuous movements do not accumulate duplicated rows
+PASS: Fractional smooth scrolling does not round up each frame into duplicated content
+PASS: Accepted recent frames bridge past a stale keyframe without stopping or losing rows
+PASS: A narrow repeated table on a wide white page aligns by its distinct row content
+PASS: Fixed headers and footers appear once rather than at every join
+PASS: The fixed shadow extent excludes adjacent white document rows
+PASS: A browser's uniform bottom border and shadow appear exactly once without repeated gray strips
+PASS: Scrolling back and forward retains the window shadow once and preserves all new document rows
+PASS: Stationary-looking white document margins are not classified as fixed window edges
+PASS: Real white document margins retain every source row after continuous scrolling
+PASS: A moving browser feed stitches continuously beside a stationary sidebar
+PASS: The browser's moving column preserves every original row without duplicates
+PASS: A fixed sidebar cannot hide missing overlap after a large document jump
+PASS: A localized animated card does not require the rest of the page to stop scrolling
+PASS: Animation without document movement never extends the screenshot
+PASS: Retina Chinese text with fixed navigation/sidebar accepts fractional and fast scrolling
+BENCHMARK: 3349 × 1936 mixed Chinese frames, 11 matches in 0.077854794 seconds; including fixture generation 0.353588417 seconds
+PASS: Retina Chinese feed keeps exact source rows across successive moving frames
+PASS: Chinese glyph phases 0.125 → 0.125 retain the physical displacement
+PASS: Chinese glyph phases 0.125 → 0.375 retain the physical displacement
+PASS: Chinese glyph phases 0.125 → 0.625 retain the physical displacement
+PASS: Chinese glyph phases 0.125 → 0.875 retain the physical displacement
+PASS: Chinese glyph phases 0.375 → 0.125 retain the physical displacement
+PASS: Chinese glyph phases 0.375 → 0.375 retain the physical displacement
+PASS: Chinese glyph phases 0.375 → 0.625 retain the physical displacement
+PASS: Chinese glyph phases 0.375 → 0.875 retain the physical displacement
+PASS: Chinese glyph phases 0.625 → 0.125 retain the physical displacement
+PASS: Chinese glyph phases 0.625 → 0.375 retain the physical displacement
+PASS: Chinese glyph phases 0.625 → 0.625 retain the physical displacement
+PASS: Chinese glyph phases 0.625 → 0.875 retain the physical displacement
+PASS: Chinese glyph phases 0.875 → 0.125 retain the physical displacement
+PASS: Chinese glyph phases 0.875 → 0.375 retain the physical displacement
+PASS: Chinese glyph phases 0.875 → 0.625 retain the physical displacement
+PASS: Chinese glyph phases 0.875 → 0.875 retain the physical displacement
+PASS: Scenario prose 1x accelerating: exact source rows; blank/glyph-fragment overlaps requiring return: 0
+PASS: Scenario prose 1x anchor-bridging: exact source rows; blank/glyph-fragment overlaps requiring return: 0
+PASS: Scenario prose 1x reversing: exact source rows; blank/glyph-fragment overlaps requiring return: 0
+PASS: Vision proposal verified on original prose 1x pixels
+PASS: Scenario code 1x accelerating: exact source rows; blank/glyph-fragment overlaps requiring return: 0
+PASS: Scenario code 1x anchor-bridging: exact source rows; blank/glyph-fragment overlaps requiring return: 0
+PASS: Scenario code 1x reversing: exact source rows; blank/glyph-fragment overlaps requiring return: 0
+PASS: Vision proposal verified on original code 1x pixels
+PASS: Scenario table 1x accelerating: exact source rows; blank/glyph-fragment overlaps requiring return: 0
+PASS: Scenario table 1x anchor-bridging: exact source rows; blank/glyph-fragment overlaps requiring return: 0
+PASS: Scenario table 1x reversing: exact source rows; blank/glyph-fragment overlaps requiring return: 0
+PASS: Vision proposal verified on original table 1x pixels
+PASS: Scenario cards 1x accelerating: exact source rows; blank/glyph-fragment overlaps requiring return: 0
+PASS: Scenario cards 1x anchor-bridging: exact source rows; blank/glyph-fragment overlaps requiring return: 0
+PASS: Scenario cards 1x reversing: exact source rows; blank/glyph-fragment overlaps requiring return: 0
+PASS: Vision proposal verified on original cards 1x pixels
+PASS: Scenario whitespace 1x accelerating: exact source rows; blank/glyph-fragment overlaps requiring return: 1
+PASS: Scenario whitespace 1x anchor-bridging: exact source rows; blank/glyph-fragment overlaps requiring return: 0
+PASS: Scenario whitespace 1x reversing: exact source rows; blank/glyph-fragment overlaps requiring return: 0
+PASS: Scenario prose 2x accelerating: exact source rows; blank/glyph-fragment overlaps requiring return: 0
+PASS: Scenario prose 2x anchor-bridging: exact source rows; blank/glyph-fragment overlaps requiring return: 0
+PASS: Scenario prose 2x reversing: exact source rows; blank/glyph-fragment overlaps requiring return: 0
+PASS: Vision proposal verified on original prose 2x pixels
+PASS: Scenario code 2x accelerating: exact source rows; blank/glyph-fragment overlaps requiring return: 0
+PASS: Scenario code 2x anchor-bridging: exact source rows; blank/glyph-fragment overlaps requiring return: 0
+PASS: Scenario code 2x reversing: exact source rows; blank/glyph-fragment overlaps requiring return: 0
+PASS: Vision proposal verified on original code 2x pixels
+PASS: Scenario table 2x accelerating: exact source rows; blank/glyph-fragment overlaps requiring return: 0
+PASS: Scenario table 2x anchor-bridging: exact source rows; blank/glyph-fragment overlaps requiring return: 0
+PASS: Scenario table 2x reversing: exact source rows; blank/glyph-fragment overlaps requiring return: 0
+PASS: Vision proposal verified on original table 2x pixels
+PASS: Scenario cards 2x accelerating: exact source rows; blank/glyph-fragment overlaps requiring return: 0
+PASS: Scenario cards 2x anchor-bridging: exact source rows; blank/glyph-fragment overlaps requiring return: 0
+PASS: Scenario cards 2x reversing: exact source rows; blank/glyph-fragment overlaps requiring return: 0
+PASS: Vision proposal verified on original cards 2x pixels
+PASS: Scenario whitespace 2x accelerating: exact source rows; blank/glyph-fragment overlaps requiring return: 1
+PASS: Scenario whitespace 2x anchor-bridging: exact source rows; blank/glyph-fragment overlaps requiring return: 0
+PASS: Scenario whitespace 2x reversing: exact source rows; blank/glyph-fragment overlaps requiring return: 0
+PASS: Invalid frame preserves every previously captured pixel
+PASS: Invalid frame preserves every previously captured pixel
+PASS: A failed frame and a missing-overlap jump can recover without adopting unverified content
+PASS: Long fractional scrolling across keyframes has at most two pixels of length drift (1)
+BENCHMARK: scenario matrix completed in 7.405855334 seconds
+PASS: Pin rotation swaps dimensions
+PASS: Inverse pin rotations preserve every pixel
+PASS: Two horizontal flips restore the source pixels
+PASS: PNG export preserves image dimensions
+PASS: JPG export preserves image dimensions
+PASS: TIFF export preserves image dimensions
+PASS: BMP export preserves image dimensions
+PASS: GIF export preserves image dimensions
+PASS: Editable annotations preserve style and geometry through backup encoding
+PASS: Pin backups preserve image data, groups, visibility and editable annotations
+PASS: A corrupt pin archive recovers from the previous valid backup
+PASS: Pin import rejects unsupported archive versions
+PASS: Pin import rejects duplicate identities
+PASS: Mosaic changes source pixels while preserving dimensions
+PASS: Blur changes source pixels while preserving dimensions
+PASS: Retina-height scrolling finds non-grid-aligned offsets
+PASS: Decorated export includes measured border and shadow padding
+PASS: Rounded export keeps transparent corners and opaque image content
+PASS: JPEG flattens transparent corners onto white
+PASS: CLI crop then rotation produces exact expected dimensions
+PASS: CLI refuses out-of-bounds crop without silently changing the request
+PASS: CLI rejects unsupported rotation
+PASS: CLI redaction affects the top-left requested region only
+PASS: Eraser restores original pixels over earlier annotations only within its region
+PASS: Import rejects non-finite annotation geometry
+PASS: Invalid editable backup geometry is rejected
+PASS: Clipboard HTML keeps text and entities while dropping executable content
+PASS: Clipboard HTML preserves local bold formatting
+PASS: Rich clipboard text renders to a bounded local image
+PASS: Default appearance satisfies configuration bounds
+PASS: New installs use the LongJuan menu bar template
+PASS: Upgrade replaces default scissors and preserves theme and palette
+PASS: The icon migration never repeats after a user's later choice
+PASS: Upgrade keeps a deliberately selected alternate menu bar icon
+PASS: Appearance import rejects invalid dimensions
+PASS: Shared appearance preserves palette order and settings
+PASS: Backup preserves custom fonts, outline colors and arrow styles
+PASS: Toolbar click dispatches the selected region into scrolling capture
+PASS: Small scroll selections show actionable feedback instead of failing silently
+PASS: Real toolbar hover routing shows the function hint above the editor
+PASS: Toolbar mouse exit removes the displayed hint
+PASS: Every toolbar button, menu and width selector has a function hint
+PASS: Hover help escapes toolbar clipping and stays within the capture window
+PASS: Hover help does not intercept mouse input
+PASS: Hover help remains visible near the top edge
+PASS: Hover exit removes the hint
+PASS: Stable-frame check distinguishes still content from scrolling
+PASS: Live preview preserves the exact top-to-bottom order of stitched strips
+PASS: Live preview uses bounded thumbnail dimensions
+PASS: Scroll controls avoid the selected region on an offset secondary display
+PASS: Full-screen selections keep scroll controls reachable
+PASS: Scroll controls survive app deactivation and the region outline passes input through
+PASS: Continuous capture consumes moving frames without waiting for a duplicate stationary frame
+PASS: Live preview cannot enlarge the control panel off-screen
+PASS: Finish button returns the stitched image and closes the capture exactly once
+PASS: Repeated close cannot deliver a second completion
+PASS: Initial capture failure remains visible without enabling an empty result
+PASS: Failed capture can close and release the capture session
+PASS: Create a synthetic ScreenCaptureKit-format surface
+PASS: Bounded stream retains the newest three independent RGBA frames without channel swaps
+PASS: Complete and Copy becomes available after the first live frame
+PASS: Complete and Copy drains queued frames into a pasteable exact long image without opening the editor
+PASS: A clipboard failure preserves the long image and offers retry or editing
+PASS: Copy can retry after the stream has stopped without restarting capture
+PASS: Local automation round-trip preserves request bytes
+PASS: Local socket is accessible only to its owner
+PASS: A second App instance cannot replace the active command socket
+PASS: Disabling local automation removes its endpoint
+PASS: Oversized socket paths fail before a descriptor is opened
+191 regression checks passed.

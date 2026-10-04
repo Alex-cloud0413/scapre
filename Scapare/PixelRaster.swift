@@ -62,8 +62,10 @@ nonisolated struct ScrollStitcher: Sendable {
     private(set) var strips: [PixelRaster]
     private(set) var previous: PixelRaster
     private var features: ScrollFeatures
-    private var position = 0
+    private var position = 0.0
     private var furthestPosition = 0
+    private var recent: (raster: PixelRaster, features: ScrollFeatures, position: Double)?
+    private(set) var recoveredMatches = 0
     private var didSetFixedEdges = false
     private var fixedTop = 0
     private var fixedBottom = 0
@@ -83,11 +85,34 @@ nonisolated struct ScrollStitcher: Sendable {
             let edges = ScrollMatcher.fixedEdges(features, nextFeatures)
             top = edges.top; bottom = edges.bottom
         }
-        let shift = try ScrollMatcher.displacement(previous, next, previousFeatures: features,
-                                                   nextFeatures: nextFeatures, excludingTop: top, bottom: bottom)
+        let nextPosition: Double
+        var recovered = false
+        let reference = recent ?? (raster: previous, features: features, position: position)
+        do {
+            let local = try ScrollMatcher.displacement(reference.raster, next,
+                previousFeatures: reference.features, nextFeatures: nextFeatures, excludingTop: top, bottom: bottom)
+            let proposal = reference.position + (try ScrollMatcher.refine(reference.raster, next, around: Double(local),
+                previousFeatures: reference.features, nextFeatures: nextFeatures, excludingTop: top, bottom: bottom))
+            if recent != nil, let anchored = try? ScrollMatcher.refine(previous, next, around: proposal - position,
+                previousFeatures: features, nextFeatures: nextFeatures, excludingTop: top, bottom: bottom) {
+                nextPosition = position + anchored
+            } else {
+                nextPosition = proposal
+                recovered = recent != nil
+            }
+        } catch {
+            guard recent != nil else { throw error }
+            // A return toward older content can overlap the anchor better than
+            // the latest frame. Neither path ever adopts an unverified frame.
+            let local = try ScrollMatcher.displacement(previous, next, previousFeatures: features,
+                nextFeatures: nextFeatures, excludingTop: top, bottom: bottom)
+            nextPosition = position + (try ScrollMatcher.refine(previous, next, around: Double(local),
+                previousFeatures: features, nextFeatures: nextFeatures, excludingTop: top, bottom: bottom))
+            recovered = true
+        }
+        let shift = nextPosition - position
         guard shift != 0 else { return false }
-        let nextPosition = position + shift
-        let newRows = max(0, nextPosition - furthestPosition)
+        let newRows = max(0, Int(nextPosition.rounded()) - furthestPosition)
         guard height + newRows <= maxHeight, (height + newRows) * next.width <= 60_000_000 else { throw ImageError.tooLarge }
         // A fixed footer belongs once, at the end, rather than in every new strip.
         if !didSetFixedEdges, bottom > 0 { strips = [strips[0].rows(0..<(previous.height - bottom))] }
@@ -96,12 +121,14 @@ nonisolated struct ScrollStitcher: Sendable {
         if bottom > 0 { footer = next.rows((next.height - bottom)..<next.height) }
         // Match against a keyframe for many updates, instead of rounding and
         // accumulating a new displacement on every fractional scrolling frame.
-        if abs(shift) >= max(16, next.height / 3) {
+        if recovered || abs(shift) >= Double(max(16, next.height / 3)) {
             previous = next; features = nextFeatures; position = nextPosition
         }
+        recent = (next, nextFeatures, nextPosition)
+        if recovered { recoveredMatches += 1 }
         guard newRows > 0 else { return false }
         strips.append(next.rows((next.height - bottom - newRows)..<(next.height - bottom)))
-        furthestPosition = nextPosition
+        furthestPosition = Int(nextPosition.rounded())
         height += newRows; frameCount += 1
         return true
     }

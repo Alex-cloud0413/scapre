@@ -78,6 +78,19 @@ nonisolated enum ScrollMatcher {
 
     static func displacement(_ previous: PixelRaster, _ next: PixelRaster,
                              previousFeatures: ScrollFeatures? = nil, nextFeatures: ScrollFeatures? = nil,
+                             excludingTop top: Int = 0, bottom: Int = 0, allowRegistration: Bool = true) throws -> Int {
+        let a = previousFeatures ?? ScrollFeatures(previous), b = nextFeatures ?? ScrollFeatures(next)
+        do {
+            return try descriptorDisplacement(previous, next, previousFeatures: a, nextFeatures: b,
+                                              excludingTop: top, bottom: bottom)
+        } catch ImageError.noOverlap where allowRegistration {
+            return try registeredDisplacement(previous, next, previousFeatures: a, nextFeatures: b,
+                                              excludingTop: top, bottom: bottom)
+        }
+    }
+
+    static func descriptorDisplacement(_ previous: PixelRaster, _ next: PixelRaster,
+                             previousFeatures: ScrollFeatures? = nil, nextFeatures: ScrollFeatures? = nil,
                              excludingTop top: Int = 0, bottom: Int = 0) throws -> Int {
         guard previous.width == next.width, previous.height == next.height,
               previous.width >= 32, previous.height >= 64 else { throw ImageError.incompatible }
@@ -92,15 +105,7 @@ nonisolated enum ScrollMatcher {
         // A stationary browser sidebar has plenty of edges but cannot vote on
         // document motion. Select columns with changes spread over several rows;
         // a blinking caret or a single changing badge is insufficient evidence.
-        var changes = [Int](repeating: 0, count: ScrollFeatures.columns)
-        var sampledRows = 0
-        for y in stride(from: lower, to: upper, by: max(1, (upper - lower) / 180)) {
-            sampledRows += 1
-            for c in changes.indices where abs(Int(a.values[y * ScrollFeatures.columns + c]) - Int(b.values[y * ScrollFeatures.columns + c])) > 2 {
-                changes[c] += 1
-            }
-        }
-        let columns = changes.indices.filter { changes[$0] >= max(4, sampledRows / 40) }
+        let columns = movingColumns(a, b, lower: lower, upper: upper)
         guard columns.count >= 3 else { throw ImageError.ambiguous }
         // Pick a textured anchor in each vertical band, preserving coverage across
         // the page. Cost is linear in height, not full-resolution pixels × offsets.
@@ -145,9 +150,74 @@ nonisolated enum ScrollMatcher {
         return winner.shift
     }
 
+    static func registeredDisplacement(_ previous: PixelRaster, _ next: PixelRaster,
+                             previousFeatures: ScrollFeatures? = nil, nextFeatures: ScrollFeatures? = nil,
+                             excludingTop top: Int = 0, bottom: Int = 0) throws -> Int {
+        guard previous.width == next.width, previous.height == next.height,
+              previous.width >= 32, previous.height >= 64 else { throw ImageError.incompatible }
+        let a = previousFeatures ?? ScrollFeatures(previous), b = nextFeatures ?? ScrollFeatures(next)
+        let margin = max(2, previous.height / 100)
+        let lower = max(top, margin), upper = previous.height - max(bottom, margin)
+        let maximumShift = upper - lower - max(40, (upper - lower) / 5)
+        guard maximumShift > 0 else { throw ImageError.incompatible }
+        let columns = movingColumns(a, b, lower: lower, upper: upper)
+        guard columns.count >= 3 else { throw ImageError.ambiguous }
+        let verified = ScrollRegistration.proposals(previous, next, top: lower, bottom: previous.height - upper,
+            columns: columns, maximumShift: maximumShift).compactMap { shift -> (shift: Int, score: Double)? in
+                guard let score = try? verify(previous, next, shift: shift, top: lower,
+                    bottom: previous.height - upper, columns: columns) else { return nil }
+                return (shift, score)
+            }.sorted { $0.score < $1.score }
+        guard let winner = verified.first else { throw ImageError.noOverlap }
+        if verified.contains(where: { abs($0.shift - winner.shift) > 3
+            && $0.score < winner.score + max(0.75, winner.score * 0.35) }) { throw ImageError.ambiguous }
+        return winner.shift
+    }
+
+    /// Recent frames establish the correspondence. The older anchor only
+    /// refines rounding near that position; it must not search the whole page
+    /// and silently choose a similar paragraph after its overlap is lost.
+    static func refine(_ previous: PixelRaster, _ next: PixelRaster, around proposal: Double,
+                       previousFeatures a: ScrollFeatures, nextFeatures b: ScrollFeatures,
+                       excludingTop top: Int, bottom: Int) throws -> Double {
+        let margin = max(2, previous.height / 100)
+        let lower = max(top, margin), upper = previous.height - max(bottom, margin)
+        let maximumShift = upper - lower - max(40, (upper - lower) / 5)
+        guard abs(proposal) <= Double(maximumShift) else { throw ImageError.noOverlap }
+        if proposal == 0, isUnchanged(previous, next) { return 0 }
+        let columns = movingColumns(a, b, lower: lower, upper: upper)
+        guard columns.count >= 3 else { throw ImageError.ambiguous }
+        let center = Int(proposal.rounded())
+        let verified = ((center - 1)...(center + 1)).compactMap { shift -> (shift: Double, score: Double)? in
+            guard abs(shift) <= maximumShift,
+                  let match = try? alignment(previous, next, shift: shift, top: lower,
+                    bottom: previous.height - upper, columns: columns) else { return nil }
+            return match
+        }
+        guard let winner = verified.min(by: { $0.score < $1.score }) else { throw ImageError.noOverlap }
+        return winner.shift
+    }
+
+    private static func movingColumns(_ a: ScrollFeatures, _ b: ScrollFeatures, lower: Int, upper: Int) -> [Int] {
+        var changes = [Int](repeating: 0, count: ScrollFeatures.columns)
+        var sampledRows = 0
+        for y in stride(from: lower, to: upper, by: max(1, (upper - lower) / 180)) {
+            sampledRows += 1
+            for c in changes.indices where abs(Int(a.values[y * ScrollFeatures.columns + c]) - Int(b.values[y * ScrollFeatures.columns + c])) > 2 {
+                changes[c] += 1
+            }
+        }
+        return changes.indices.filter { changes[$0] >= max(4, sampledRows / 40) }
+    }
+
     /// Verify ink/edges over the overlap, including rows the coarse search never
     /// sampled. Similar text lines or large white areas are not enough evidence.
     private static func verify(_ a: PixelRaster, _ b: PixelRaster, shift: Int, top: Int, bottom: Int, columns: [Int]) throws -> Double {
+        try alignment(a, b, shift: shift, top: top, bottom: bottom, columns: columns).score
+    }
+
+    private static func alignment(_ a: PixelRaster, _ b: PixelRaster, shift: Int, top: Int, bottom: Int,
+                                  columns: [Int]) throws -> (shift: Double, score: Double) {
         let start = max(top, top + shift), end = min(a.height - bottom, a.height - bottom + shift)
         let rowStep = max(1, (end - start) / 120), columnStep = max(1, a.width / 160)
         // Smooth scrolling may place glyphs between physical pixels. Fit one common
@@ -158,7 +228,7 @@ nonisolated enum ScrollMatcher {
         var matches = [Int](repeating: 0, count: totals.count)
         var tileSamples = [Int](repeating: 0, count: tileCount)
         let moving = Set(columns)
-        var count = 0
+        var samples: [(x: Int, y: Int, ny: Int)] = []
         for y in stride(from: start, to: end, by: rowStep) {
             let ny = y - shift
             for x in stride(from: max(1, a.width / 32), to: min(a.width - 1, a.width * 31 / 32), by: columnStep) {
@@ -168,35 +238,59 @@ nonisolated enum ScrollMatcher {
                 let edgeA = abs(a.luminance(x, y) - a.luminance(x - 1, y)) + abs(a.luminance(x, y) - a.luminance(x, max(0, y - 1)))
                 let edgeB = abs(b.luminance(x, ny) - b.luminance(x - 1, ny)) + abs(b.luminance(x, ny) - b.luminance(x, max(0, ny - 1)))
                 guard max(edgeA, edgeB) > 8 else { continue }
-                count += 1
-                let band = min(3, (y - start) * 4 / max(1, end - start))
-                let tile = band * 6 + min(5, x * 6 / a.width)
-                tileSamples[tile] += 1
-                let i = (y * a.width + x) * 4, j = (ny * b.width + x) * 4
-                for (index, phase) in phases.enumerated() {
-                    let fraction = abs(phase), step = phase < 0 ? -1 : 1
-                    let ai = (max(0, min(a.height - 1, y + step)) * a.width + x) * 4
-                    let bi = (max(0, min(b.height - 1, ny + step)) * b.width + x) * 4
-                    var errors = [0.0, 0.0]
+                samples.append((x, y, ny))
+            }
+        }
+        guard samples.count >= 48, let firstRow = samples.first?.y, let lastRow = samples.last?.y,
+              lastRow - firstRow >= 24 else { throw ImageError.ambiguous }
+        // Divide the content-bearing extent, not the surrounding blank margin.
+        // A short paragraph at one edge of a large white region still provides
+        // independent evidence from several lines.
+        for (x, y, ny) in samples {
+            let band = min(3, (y - firstRow) * 4 / max(1, lastRow - firstRow + 1))
+            let tile = band * 6 + min(5, x * 6 / a.width)
+            tileSamples[tile] += 1
+            // Both consecutive browser frames can already be resampled at
+            // different fractional phases. Put both on the same lightly
+            // filtered basis before fitting a phase; interpolating just one
+            // raw glyph cannot undo the other's previous resampling.
+            var values = [Double](repeating: 0, count: 18)
+            for (side, raster, row) in [(0, a, y), (1, b, ny)] {
+                for neighbor in -1...1 {
+                    let center = max(0, min(raster.height - 1, row + neighbor))
                     for c in 0..<3 {
-                        let av = Double(a.bytes[i+c]), bv = Double(b.bytes[j+c])
-                        errors[0] += abs(av * (1 - fraction) + Double(a.bytes[ai+c]) * fraction - bv) / 3
-                        errors[1] += abs(bv * (1 - fraction) + Double(b.bytes[bi+c]) * fraction - av) / 3
-                    }
-                    for side in 0..<2 {
-                        let k = (index * 2 + side) * tileCount + tile
-                        totals[k] += errors[side]
-                        if errors[side] < 24 { matches[k] += 1 }
+                        let before = Double(raster.bytes[(max(0, center - 1) * raster.width + x) * 4 + c])
+                        let at = Double(raster.bytes[(center * raster.width + x) * 4 + c])
+                        let after = Double(raster.bytes[(min(raster.height - 1, center + 1) * raster.width + x) * 4 + c])
+                        values[(side * 3 + neighbor + 1) * 3 + c] = (before + 2 * at + after) / 4
                     }
                 }
             }
+            for (index, phase) in phases.enumerated() {
+                let fraction = abs(phase), step = phase < 0 ? -1 : 1
+                var errors = [0.0, 0.0]
+                for c in 0..<3 {
+                    let av = values[3+c], bv = values[12+c]
+                    errors[0] += abs(av * (1 - fraction) + values[(1 + step) * 3+c] * fraction - bv) / 3
+                    errors[1] += abs(bv * (1 - fraction) + values[(4 + step) * 3+c] * fraction - av) / 3
+                }
+                for side in 0..<2 {
+                    let k = (index * 2 + side) * tileCount + tile
+                    totals[k] += errors[side]
+                    if errors[side] < 24 { matches[k] += 1 }
+                }
+            }
         }
-        guard count >= 24 else { throw ImageError.ambiguous }
         // Require a shared displacement/phase over most textured content and
-        // three vertical bands. Local animated cards may be outliers; they must
+        // multiple vertical bands. Local animated cards may be outliers; they must
         // not make every live frame fail until the page happens to become still.
-        var valid: [Double] = []
+        var valid: [(shift: Double, score: Double)] = []
         let evidence = tileSamples.filter { $0 >= 4 }.reduce(0) { $0 + min(96, $1) }
+        let informativeBands = Set(tileSamples.indices.filter { tileSamples[$0] >= 4 }.map { $0 / 6 })
+        // Empty page regions cannot supply evidence. Require consensus across
+        // the regions that actually contain ink, with at least two separated
+        // bands so one animated card cannot masquerade as document movement.
+        let requiredBands = max(2, min(3, informativeBands.count))
         for phase in 0..<(phases.count * 2) {
             var inliers = 0, weight = 0, total = 0.0
             var bands = Set<Int>()
@@ -207,12 +301,13 @@ nonisolated enum ScrollMatcher {
                     weight += min(96, tileSamples[tile])
                 }
             }
-            if inliers >= 24 && weight * 10 >= evidence * 7 && bands.count >= 3 {
-                valid.append(total / Double(inliers))
+            if inliers >= (requiredBands == 2 ? 48 : 24) && weight * 10 >= evidence * 7 && bands.count >= requiredBands {
+                let offset = phases[phase / 2] * (phase % 2 == 0 ? 1 : -1)
+                valid.append((Double(shift) + offset, total / Double(inliers)))
             }
         }
-        guard let score = valid.min() else { throw ImageError.noOverlap }
-        return score
+        guard let winner = valid.min(by: { $0.score < $1.score }) else { throw ImageError.noOverlap }
+        return winner
     }
 
     /// Only treat an edge as fixed when it contains actual stationary texture.

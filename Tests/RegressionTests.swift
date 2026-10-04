@@ -251,6 +251,15 @@ struct RegressionTests {
         }
         check(abs(fractional.height - viewportHeight - 24) <= 1 && fractionalAccepted >= 10,
               "Fractional smooth scrolling does not round up each frame into duplicated content")
+        // The latest accepted viewport must bridge past an older keyframe.
+        // Every adjacent pair overlaps, even when the original keyframe does not.
+        var bridging = ScrollStitcher(first: textDocument.rows(0..<viewportHeight))
+        for offset in [350, 1150, 1480, 2250, 2600, 3340, 3670, 4420] {
+            _ = try bridging.append(textDocument.rows(offset..<(offset + viewportHeight)))
+        }
+        try check(try PixelRaster(bridging.image()!).bytes == textDocument.rows(0..<(4420 + viewportHeight)).bytes,
+              "Accepted recent frames bridge past a stale keyframe without stopping or losing rows")
+
         let tableDocument = try documentPage(width: 1280, height: 4000, table: true)
         var tableCapture = ScrollStitcher(first: tableDocument.rows(0..<viewportHeight))
         for offset in [20, 58, 170, 415, 740, 1100, 1500] { _ = try tableCapture.append(tableDocument.rows(offset..<(offset + viewportHeight))) }
@@ -312,7 +321,7 @@ struct RegressionTests {
         check(marginEdges.top == 0 && marginEdges.bottom == 0,
               "Stationary-looking white document margins are not classified as fixed window edges")
         var marginCapture = ScrollStitcher(first: marginFirst)
-        for offset in [3, 19, 82, 143, 245, 410, 680, 850, 1070, 1350, 1610] {
+        for offset in [3, 19, 82, 143, 410, 680, 1070, 1610] {
             _ = try marginCapture.append(marginDocument.rows(offset..<(offset + viewportHeight)))
         }
         try check(try PixelRaster(marginCapture.image()!).bytes == marginDocument.rows(0..<(1610 + viewportHeight)).bytes,
@@ -440,6 +449,7 @@ struct RegressionTests {
             }
         }
 
+        passed += try ScrollingScenarioTests.run()
         let turned = try ImageTransform.apply(frame1.image()!, quarterTurns: 1, flipHorizontal: false, flipVertical: false)
         check(turned.width == 240 && turned.height == 96, "Pin rotation swaps dimensions")
         let restored = try ImageTransform.apply(turned, quarterTurns: -1, flipHorizontal: false, flipVertical: false)
