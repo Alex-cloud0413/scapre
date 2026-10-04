@@ -36,7 +36,7 @@ scripts/test.sh
 
 Bundle ID 保留 `com.gaoyiming.SnapTool`，用于继续已有 App Store Connect 记录和本地偏好设置身份。它不是面向用户的产品名称。Apple 规定，上传过构建后不能在原有 App 记录中更改 Bundle ID。
 
-当前本机修复版为 1.1.6（构建 11），补上窗口两侧及内部侧栏圆角的识别，避免固定边缘随每一帧重复追加；回滚时保留长图原有末尾正文。233 项回归检查通过，并使用用户附件的真实边缘配合可控正文重放验证。原页面实机效果需用户复测。本轮未更新 App Store Connect，最近提交记录为 1.1.3（构建 8）。Bundle ID 继续沿用原 App Store 记录。详见[圆角修复记录](docs/rounded-window-edges-2026-10-04.md)、[上一版开源调研](docs/scroll-capture-research-2026-10-04.md)和[已提交版本记录](docs/appstore-release-2026-10-04.md)。
+当前版本为 **1.1.6（构建 11）**，补上窗口两侧及内部侧栏圆角的识别，避免固定边缘随每一帧重复追加；回滚时保留长图原有末尾正文。233 项回归检查和 12 项附件边缘重放检查通过，用户确认固定侧边栏、固定顶边栏两个实际场景均正常。源码已同步 GitHub，2026-10-04 14:10 已提交 App Store 审核，当前状态为「等待审核」，通过后自动发布。Bundle ID 继续沿用原 App Store 记录。详见[圆角修复记录](docs/rounded-window-edges-2026-10-04.md)、[上一版开源调研](docs/scroll-capture-research-2026-10-04.md)和[本次发布记录](docs/appstore-release-1.1.6-2026-10-04.md)。
 
 ## 当前文档
 
