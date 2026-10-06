@@ -52,12 +52,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return consumed ? nil : event
         }
 
-        // 首次启动：弹引导窗让用户选择快捷键
+        // First launch and manual reopening share the same feature guide.
         if !SettingsManager.setupCompleted {
-            DispatchQueue.main.async { [weak self] in
-                SetupWindowController.showSetup {
-                    self?.refreshMenuShortcut()
-                }
+            DispatchQueue.main.async {
+                FeatureGuideController.show(firstRun: true)
             }
         }
     }
@@ -149,6 +147,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settings.keyEquivalentModifierMask = [.command]
         settings.target = self
         menu.addItem(settings)
+
+        add("功能引导…", #selector(showFeatureGuideAction))
 
         let about = NSMenuItem(title: "关于 Scapare",
                                action: #selector(showAboutAction),
@@ -252,6 +252,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func openSettingsAction() {
         SetupWindowController.showSettings()
     }
+
+    @objc private func showFeatureGuideAction() { FeatureGuideController.show() }
 
     @objc private func showAboutAction() {
         showAbout()

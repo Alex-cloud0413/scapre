@@ -661,6 +661,48 @@ struct RegressionTests {
         capturePin.dispose()
         editor.setSelection(CGRect(x: 100, y: 160, width: 360, height: 240))
         func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        // The guide can be reopened without rerunning setup or resetting preferences.
+        let guideDefaultsName = "Scapare.Guide.Tests." + UUID().uuidString
+        let guideDefaults = UserDefaults(suiteName: guideDefaultsName)!
+        defer { guideDefaults.removePersistentDomain(forName: guideDefaultsName) }
+        SettingsManager.save(keyCode: 122, modifiers: 0, in: guideDefaults)
+        guideDefaults.set(true, forKey: "gesture_enabled")
+        let beforeGuide = guideDefaults.dictionaryRepresentation()
+        let guide = FeatureGuideController(isFirstRun: false, defaults: guideDefaults)
+        guide.window.contentView?.layoutSubtreeIfNeeded()
+        let guideScrollViews = descendants(guide.window.contentView!).compactMap { $0 as? NSScrollView }
+        check(guideScrollViews.count == 2 && guideScrollViews.allSatisfy { $0.frame.height > 300 && $0.frame.width > 150 },
+              "Guide reserves visible space for both the topic list and instructions")
+        for topic in FeatureGuideTopic.allCases {
+            guide.selectTopic(topic)
+            let labels = descendants(guide.window.contentView!).compactMap { $0 as? NSTextField }.map(\.stringValue)
+            check(topic.steps.allSatisfy { labels.contains($0.detail) } && labels.contains(topic.tip),
+                  "Guide renders all steps and tip for \(topic.title)")
+        }
+        guide.doneButton.performClick(nil)
+        check(NSDictionary(dictionary: guideDefaults.dictionaryRepresentation()).isEqual(to: beforeGuide),
+              "Completing a manually reopened guide leaves setup, shortcut and preferences unchanged")
+        let firstGuide = FeatureGuideController(isFirstRun: true, defaults: guideDefaults)
+        firstGuide.window.close()
+        check(guideDefaults.bool(forKey: "setup_completed") && guideDefaults.integer(forKey: "shortcut_keyCode") == 122
+              && guideDefaults.bool(forKey: "gesture_enabled"),
+              "Closing the first-launch guide marks it seen while preserving existing preferences")
+        let reopenedGuide = FeatureGuideController(isFirstRun: false, defaults: guideDefaults)
+        check(reopenedGuide.doneButton.title == "完成" && reopenedGuide.window.title == "功能引导 · Scapare",
+              "Returning users get a reference guide instead of first-launch setup")
+        reopenedGuide.selectTopic(.scrolling)
+        if let renderPath = ProcessInfo.processInfo.environment["SCAPARE_TEST_RENDER_DIR"], let content = reopenedGuide.window.contentView {
+            let folder = URL(fileURLWithPath: renderPath)
+            for (name, appearance) in [("guide-light", NSAppearance.Name.aqua), ("guide-dark", NSAppearance.Name.darkAqua)] {
+                reopenedGuide.window.appearance = NSAppearance(named: appearance)
+                content.layoutSubtreeIfNeeded()
+                if let rep = content.bitmapImageRepForCachingDisplay(in: content.bounds) {
+                    content.cacheDisplay(in: content.bounds, to: rep)
+                    try rep.representation(using: .png, properties: [:])?.write(to: folder.appendingPathComponent(name + ".png"))
+                }
+            }
+        }
+        reopenedGuide.window.close()
         let toolbar = descendants(editor).compactMap { $0 as? EditorToolbar }.first!
         let scrollButton = descendants(toolbar).compactMap { $0 as? NSButton }.first { $0.identifier?.rawValue == "scrolling-capture" }!
         scrollButton.performClick(nil)

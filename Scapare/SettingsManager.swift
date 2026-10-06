@@ -39,6 +39,10 @@ enum SettingsManager {
         set { UserDefaults.standard.set(newValue, forKey: kSetupCompleted) }
     }
 
+    static func completeSetup(in defaults: UserDefaults = .standard) {
+        defaults.set(true, forKey: kSetupCompleted)
+    }
+
     // Migrate existing users without losing their saved shortcut.
     // 首次启动时确保有默认值。
     static func initializeDefaults(in defaults: UserDefaults = .standard) {

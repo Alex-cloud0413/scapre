@@ -14,7 +14,7 @@ final class SetupWindowController: NSObject, NSWindowDelegate {
     var onDismiss: (() -> Void)?
 
     static func showSetup(completion: @escaping () -> Void) { show(firstRun: true, completion: completion) }
-    static func showSettings() { show(firstRun: !SettingsManager.setupCompleted, completion: nil) }
+    static func showSettings() { show(firstRun: false, completion: nil) }
     private static func show(firstRun: Bool, completion: (() -> Void)?) {
         if let existing = current {
             NSApp.activate(ignoringOtherApps: true)
@@ -31,7 +31,7 @@ final class SetupWindowController: NSObject, NSWindowDelegate {
     private init(isFirstRun: Bool) {
         self.isFirstRun = isFirstRun
         recorder = ShortcutRecorder(keyCode: SettingsManager.keyCode, modifiers: SettingsManager.modifiers)
-        window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 420, height: 340),
+        window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 420, height: 390),
                           styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = isFirstRun ? "欢迎使用 Scapare" : "Scapare 设置"
         window.isReleasedWhenClosed = false
@@ -60,7 +60,9 @@ final class SetupWindowController: NSObject, NSWindowDelegate {
         let done = NSButton(title: isFirstRun ? "开始使用" : "完成", target: self, action: #selector(dismissTapped))
         done.bezelStyle = .rounded
         done.keyEquivalent = "\r"
-        let stack = NSStackView(views: [title, hint, recorder, shortcutStatus, loginCheckbox, loginStatus, loginSettingsButton, done])
+        let guide = NSButton(title: "查看功能引导…", target: self, action: #selector(showFeatureGuide))
+        guide.bezelStyle = .rounded
+        let stack = NSStackView(views: [title, hint, recorder, shortcutStatus, loginCheckbox, loginStatus, loginSettingsButton, guide, done])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 12
@@ -104,6 +106,7 @@ final class SetupWindowController: NSObject, NSWindowDelegate {
         }
     }
     @objc private func openLoginSettings() { SMAppService.openSystemSettingsLoginItems() }
+    @objc private func showFeatureGuide() { FeatureGuideController.show() }
     @objc private func dismissTapped() {
         if isFirstRun { SettingsManager.setupCompleted = true }
         window.close()
