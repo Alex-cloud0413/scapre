@@ -83,15 +83,25 @@ nonisolated enum ScrollMatcher {
         do {
             return try descriptorDisplacement(previous, next, previousFeatures: a, nextFeatures: b,
                                               excludingTop: top, bottom: bottom)
-        } catch ImageError.noOverlap where allowRegistration {
-            return try registeredDisplacement(previous, next, previousFeatures: a, nextFeatures: b,
-                                              excludingTop: top, bottom: bottom)
+        } catch let error as ImageError {
+            if error == .noOverlap || error == .ambiguous {
+                // A tall sidebar can still be moving as it approaches its
+                // sticky boundary. Verify the central document separately;
+                // neither its offset nor fractional phase is guessed.
+                if let shift = try? descriptorDisplacement(previous, next, previousFeatures: a, nextFeatures: b,
+                    excludingTop: top, bottom: bottom, centralOnly: true) { return shift }
+            }
+            if error == .noOverlap, allowRegistration {
+                return try registeredDisplacement(previous, next, previousFeatures: a, nextFeatures: b,
+                                                  excludingTop: top, bottom: bottom)
+            }
+            throw error
         }
     }
 
     static func descriptorDisplacement(_ previous: PixelRaster, _ next: PixelRaster,
                              previousFeatures: ScrollFeatures? = nil, nextFeatures: ScrollFeatures? = nil,
-                             excludingTop top: Int = 0, bottom: Int = 0) throws -> Int {
+                             excludingTop top: Int = 0, bottom: Int = 0, centralOnly: Bool = false) throws -> Int {
         guard previous.width == next.width, previous.height == next.height,
               previous.width >= 32, previous.height >= 64 else { throw ImageError.incompatible }
         if isUnchanged(previous, next) { return 0 }
@@ -105,7 +115,9 @@ nonisolated enum ScrollMatcher {
         // A stationary browser sidebar has plenty of edges but cannot vote on
         // document motion. Select columns with changes spread over several rows;
         // a blinking caret or a single changing badge is insufficient evidence.
-        let columns = movingColumns(a, b, lower: lower, upper: upper)
+        let columns = movingColumns(a, b, lower: lower, upper: upper).filter {
+            !centralOnly || (ScrollFeatures.columns/4..<(ScrollFeatures.columns*3/4)).contains($0)
+        }
         guard columns.count >= 3 else { throw ImageError.ambiguous }
         // Pick a textured anchor in each vertical band, preserving coverage across
         // the page. Cost is linear in height, not full-resolution pixels × offsets.
@@ -188,13 +200,16 @@ nonisolated enum ScrollMatcher {
         let columns = movingColumns(a, b, lower: lower, upper: upper)
         guard columns.count >= 3 else { throw ImageError.ambiguous }
         let center = Int(proposal.rounded())
-        let verified = ((center - 1)...(center + 1)).compactMap { shift -> (shift: Double, score: Double)? in
-            guard abs(shift) <= maximumShift,
-                  let match = try? alignment(previous, next, shift: shift, top: lower,
-                    bottom: previous.height - upper, columns: columns) else { return nil }
-            return match
+        func winner(_ measured: [Int]) -> (shift: Double, score: Double)? {
+            guard measured.count >= 3 else { return nil }
+            return ((center-1)...(center+1)).compactMap { shift -> (shift: Double, score: Double)? in
+                guard abs(shift) <= maximumShift else { return nil }
+                return try? alignment(previous, next, shift: shift, top: lower,
+                    bottom: previous.height-upper, columns: measured)
+            }.min(by: { $0.score < $1.score })
         }
-        guard let winner = verified.min(by: { $0.score < $1.score }) else { throw ImageError.noOverlap }
+        let central = columns.filter { (ScrollFeatures.columns/4..<(ScrollFeatures.columns*3/4)).contains($0) }
+        guard let winner = winner(columns) ?? winner(central) else { throw ImageError.noOverlap }
         return winner.shift
     }
 
@@ -314,8 +329,37 @@ nonisolated enum ScrollMatcher {
     /// A white margin alone must never remove document content.
     static func fixedEdges(_ previous: PixelRaster, _ next: PixelRaster,
                            previousFeatures a: ScrollFeatures, nextFeatures b: ScrollFeatures,
-                           excludingColumns: [Range<Int>] = []) -> (top: Int, bottom: Int) {
-        let sampled = fixedEdges(a, b)
+                           excludingColumns: [Range<Int>] = [], displacement: Int? = nil) -> (top: Int, bottom: Int) {
+        let columns = (0..<ScrollFeatures.columns).filter { c in
+            let x = min(previous.width - 2, max(1, previous.width / 16 + c * (previous.width * 7 / 8) / ScrollFeatures.columns))
+            return !excludingColumns.contains(where: { $0.contains(x) })
+        }
+        let baseline = fixedEdges(a, b)
+        var sampled = excludingColumns.isEmpty ? baseline : fixedEdges(a, b, columns: columns)
+        if !excludingColumns.isEmpty, columns.count >= 3 {
+            // A real toolbar may have its title only above the sidebar. Its
+            // broad stationary background boundary is still visible over the
+            // body; preserve that chrome instead of dropping its only label.
+            // Sidebar-only labels have no such boundary across the body.
+            func wideBoundary(top: Bool, length: Int) -> Bool {
+                guard length >= 3 else { return false }
+                for depth in 1..<length {
+                    let y = top ? depth : a.height - 1 - depth
+                    let neighbor = top ? y-1 : y+1
+                    var hits = 0
+                    for c in columns {
+                        let i = y * ScrollFeatures.columns + c, j = neighbor * ScrollFeatures.columns + c
+                        if abs(Int(a.values[i])-Int(a.values[j])) > 2,
+                           abs(Int(a.values[i])-Int(b.values[i])) <= 2,
+                           abs(Int(a.values[j])-Int(b.values[j])) <= 2 { hits += 1 }
+                    }
+                    if hits * 4 >= columns.count * 3 { return true }
+                }
+                return false
+            }
+            if wideBoundary(top: true, length: baseline.top) { sampled.top = max(sampled.top, baseline.top) }
+            if wideBoundary(top: false, length: baseline.bottom) { sampled.bottom = max(sampled.bottom, baseline.bottom) }
+        }
         // The motion descriptor deliberately ignores the outermost columns.
         // Window and pane corners at either end often exist ONLY there, while the center of
         // the same rows is scrolling content. Inspect every column for stable
@@ -342,21 +386,67 @@ nonisolated enum ScrollMatcher {
                         else if lastEdge > 0, depth - lastEdge >= max(8, previous.height / 100) { break }
                     }
                 }
-                if stableRows >= 3 && contrast >= 12 { length = max(length, lastEdge) }
+                if stableRows >= 3 && contrast >= 12 {
+                    if let shift = displacement, shift != 0 {
+                        // A periodic body column can be identical at screen
+                        // coordinates too. If its edges also follow the proven
+                        // document motion, it cannot determine a fixed footer.
+                        var checked = 0, aligned = 0
+                        for depth in 1..<lastEdge {
+                            let y = top ? depth : previous.height - 1 - depth
+                            let neighbor = top ? y-1 : y+1
+                            let i = (y * width + x) * 4, j = (neighbor * width + x) * 4
+                            var gradient = 0
+                            for c in 0..<3 { gradient = max(gradient, abs(Int(previous.bytes[i+c])-Int(previous.bytes[j+c]))) }
+                            guard gradient > 2 else { continue }
+                            let mappedY: Int, mappedNeighbor: Int
+                            let source: PixelRaster, target: PixelRaster
+                            if (0..<previous.height).contains(y-shift), (0..<previous.height).contains(neighbor-shift) {
+                                source = previous; target = next; mappedY = y-shift; mappedNeighbor = neighbor-shift
+                            } else {
+                                guard (0..<previous.height).contains(y+shift), (0..<previous.height).contains(neighbor+shift) else { continue }
+                                source = next; target = previous; mappedY = y+shift; mappedNeighbor = neighbor+shift
+                            }
+                            let p = (mappedY * width + x) * 4, q = (mappedNeighbor * width + x) * 4
+                            var difference = 0
+                            for c in 0..<3 {
+                                difference = max(difference, abs(Int(source.bytes[i+c])-Int(target.bytes[p+c])),
+                                    abs(Int(source.bytes[j+c])-Int(target.bytes[q+c])))
+                            }
+                            checked += 1
+                            if difference <= 2 { aligned += 1 }
+                        }
+                        if checked > 0, aligned * 10 >= checked * 9 { continue }
+                    }
+                    length = max(length, lastEdge)
+                }
             }
             return length
         }
         return (decoration(top: true, sampled: sampled.top), decoration(top: false, sampled: sampled.bottom))
     }
 
-    static func fixedEdges(_ a: ScrollFeatures, _ b: ScrollFeatures) -> (top: Int, bottom: Int) {
+    static func fixedEdges(_ a: ScrollFeatures, _ b: ScrollFeatures, columns: [Int]? = nil) -> (top: Int, bottom: Int) {
         let limit = a.height / 5
         func length(_ rows: [Int]) -> Int {
             var count = 0, textured = 0
             for y in rows {
-                guard a.distance(row: y, to: b, row: y) < 0.5 else { break }
+                let distance: Double
+                if let columns {
+                    guard !columns.isEmpty else { break }
+                    distance = Double(columns.reduce(0) {
+                        $0 + abs(Int(a.values[y * ScrollFeatures.columns + $1]) - Int(b.values[y * ScrollFeatures.columns + $1]))
+                    }) / Double(columns.count)
+                } else { distance = a.distance(row: y, to: b, row: y) }
+                guard distance < 0.5 else { break }
                 count += 1
-                if a.energy[y] > 100 { textured += 1 }
+                let energy: Int
+                if let columns {
+                    energy = a.texture(row: y, columns: columns) + (y > 0 ? columns.reduce(0) {
+                        $0 + abs(Int(a.values[y * ScrollFeatures.columns + $1]) - Int(a.values[(y - 1) * ScrollFeatures.columns + $1]))
+                    } : 0)
+                } else { energy = a.energy[y] }
+                if energy > 100 { textured += 1 }
             }
             return textured >= 3 && count >= 6 ? count : 0
         }

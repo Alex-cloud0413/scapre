@@ -38,7 +38,7 @@ scripts/test.sh
 
 Bundle ID 保留 `com.gaoyiming.SnapTool`，用于继续已有 App Store Connect 记录和本地偏好设置身份。它不是面向用户的产品名称。Apple 规定，上传过构建后不能在原有 App 记录中更改 Bundle ID。
 
-当前开发版本为 **1.2.1（构建 16）**，修复双向与跨页长截图中的固定侧栏重复，保留双向滚动扩展、跨页追加和实操「功能引导」。修复见[侧栏输出记录](docs/fixed-sidebar-composition-2026-10-06.md)，双向实现见[双向与跨页记录](docs/bidirectional-scroll-2026-10-06.md)。本轮先更新本机可测试版本，未推送 GitHub 或提交 App Store。
+当前开发版本为 **1.2.2（构建 17）**，固定侧栏随有效滚动持续识别，处理首次漏判、悬停变化和短菜单；先滚动后固定的侧栏使用独立坐标保存导航内容。保留双向滚动扩展、跨页追加和实操「功能引导」。修复与开源调研见[持续侧栏识别](docs/fixed-sidebar-research-2026-10-06.md)，双向实现见[双向与跨页记录](docs/bidirectional-scroll-2026-10-06.md)。本轮先更新本机可测试版本，未推送 GitHub 或提交 App Store。
 
 保留 1.1.7 的交互修复：快捷键截图使用不切换前台应用、无显示动画的面板；放大镜默认关闭，框选后不显示；可见桌面贴图可纳入再次截图和窗口框选。详见[交互修复](docs/capture-polish-2026-10-06.md)。
 

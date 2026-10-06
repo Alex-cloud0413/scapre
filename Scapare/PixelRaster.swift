@@ -68,6 +68,7 @@ nonisolated struct ScrollStitcher: Sendable {
     private var leadingStrips: [PixelRaster] = []
     private var header: PixelRaster?
     private var sidebars: [ScrollFixedSidebar] = []
+    private var sidebarTracker: ScrollSidebarTracker
     private var recent: (raster: PixelRaster, features: ScrollFeatures, position: Double)?
     private(set) var recoveredMatches = 0
     private var didSetFixedEdges = false
@@ -79,9 +80,12 @@ nonisolated struct ScrollStitcher: Sendable {
     private(set) var height: Int
     private(set) var frameCount = 1
     let maxHeight: Int
-    init(first: PixelRaster, maxHeight: Int = 30_000) {
+    private let tracksSidebars: Bool
+    init(first: PixelRaster, maxHeight: Int = 30_000, tracksSidebars: Bool = true) {
         strips = [first]; previous = first; features = ScrollFeatures(first)
         height = first.height; self.maxHeight = maxHeight
+        sidebarTracker = ScrollSidebarTracker(first: first)
+        self.tracksSidebars = tracksSidebars
     }
     mutating func append(_ next: PixelRaster) throws -> Bool {
         let nextFeatures = ScrollFeatures(next)
@@ -125,15 +129,18 @@ nonisolated struct ScrollStitcher: Sendable {
             recent = (next, nextFeatures, nextPosition)
             return false
         }
-        var detectedSidebars = sidebars
+        var nextSidebarTracker = sidebarTracker
+        if tracksSidebars {
+            nextSidebarTracker.observe(next, position: nextPosition,
+                top: didSetFixedEdges ? outputTop : top, bottom: didSetFixedEdges ? outputBottom : bottom)
+        }
         if !didSetFixedEdges {
-            let ranges = ScrollFixedSidebar.detect(previous, next, top: top, bottom: bottom, shift: Int(shift.rounded()))
+            let ranges = nextSidebarTracker.exclusions
             // Sidebar labels near a viewport edge are not a fixed page header
             // or footer. Keep partial window decorations outside those panes.
             let decorations = ScrollMatcher.fixedEdges(previous, next, previousFeatures: features,
-                nextFeatures: nextFeatures, excludingColumns: ranges)
+                nextFeatures: nextFeatures, excludingColumns: ranges, displacement: Int(shift.rounded()))
             outputTop = decorations.top; outputBottom = decorations.bottom
-            detectedSidebars = ranges.map { ScrollFixedSidebar(source: previous, columns: $0, top: outputTop, bottom: outputBottom) }
         }
         let prependRows = max(0, earliestPosition - roundedPosition)
         let appendRows = max(0, roundedPosition - furthestPosition)
@@ -150,7 +157,10 @@ nonisolated struct ScrollStitcher: Sendable {
             if outputBottom > 0 { footer = first.rows((first.height - outputBottom)..<first.height) }
         }
         didSetFixedEdges = true
-        sidebars = detectedSidebars
+        sidebars = tracksSidebars ? nextSidebarTracker.overlays(top: outputTop, bottom: outputBottom,
+            maximumHeight: height + newRows - outputTop - outputBottom) : []
+        let sidebarChanged = nextSidebarTracker.revision != sidebarTracker.revision
+        sidebarTracker = nextSidebarTracker
         fixedTop = top; fixedBottom = bottom; headerHeight = outputTop; footerHeight = outputBottom
         if outputTop > 0, roundedPosition <= earliestPosition { header = next.rows(0..<outputTop) }
         if outputBottom > 0, roundedPosition >= furthestPosition {
@@ -163,7 +173,7 @@ nonisolated struct ScrollStitcher: Sendable {
         }
         recent = (next, nextFeatures, nextPosition)
         if recovered { recoveredMatches += 1 }
-        guard newRows > 0 else { return false }
+        guard newRows > 0 else { return sidebarChanged }
         if prependRows > 0 {
             leadingStrips.append(next.rows(outputTop..<(outputTop + prependRows)))
             earliestPosition = roundedPosition
@@ -180,6 +190,7 @@ nonisolated struct ScrollStitcher: Sendable {
             strips: (header.map { [$0] } ?? []) + Array(leadingStrips.reversed()) + strips + (footer.map { [$0] } ?? []),
             sidebars: sidebars.map { ScrollSidebarOverlay(sidebar: $0, top: headerHeight, height: height - headerHeight - footerHeight) })
     }
+    var capturedPositions: (minimum: Int, maximum: Int) { (earliestPosition, furthestPosition) }
     func image() -> CGImage? { result.image() }
     func preview(maxSize: CGSize) -> CGImage? { result.preview(maxSize: maxSize) }
 }

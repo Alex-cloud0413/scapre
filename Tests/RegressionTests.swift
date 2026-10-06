@@ -451,6 +451,8 @@ struct RegressionTests {
         passed += try ScrollingScenarioTests.run()
         passed += try await BidirectionalCaptureTests.run()
         passed += try await FixedSidebarCompositionTests.run()
+        passed += try await AdaptiveSidebarTests.run()
+        passed += try ThirdPageSidebarReplayTests.run()
         passed += try WindowEdgeRegressionTests.run()
         let turned = try ImageTransform.apply(frame1.image()!, quarterTurns: 1, flipHorizontal: false, flipVertical: false)
         check(turned.width == 240 && turned.height == 96, "Pin rotation swaps dimensions")
