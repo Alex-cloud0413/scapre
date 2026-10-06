@@ -60,7 +60,7 @@ final class SetupWindowController: NSObject, NSWindowDelegate {
         let done = NSButton(title: isFirstRun ? "开始使用" : "完成", target: self, action: #selector(dismissTapped))
         done.bezelStyle = .rounded
         done.keyEquivalent = "\r"
-        let guide = NSButton(title: "查看功能引导…", target: self, action: #selector(showFeatureGuide))
+        let guide = NSButton(title: "功能引导", target: self, action: #selector(showFeatureGuide))
         guide.bezelStyle = .rounded
         let stack = NSStackView(views: [title, hint, recorder, shortcutStatus, loginCheckbox, loginStatus, loginSettingsButton, guide, done])
         stack.orientation = .vertical

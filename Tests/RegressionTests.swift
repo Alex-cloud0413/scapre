@@ -670,14 +670,14 @@ struct RegressionTests {
         let beforeGuide = guideDefaults.dictionaryRepresentation()
         let guide = FeatureGuideController(isFirstRun: false, defaults: guideDefaults)
         guide.window.contentView?.layoutSubtreeIfNeeded()
-        let guideScrollViews = descendants(guide.window.contentView!).compactMap { $0 as? NSScrollView }
+        let guideScrollViews = descendants(guide.window.contentView!).compactMap { $0 as? NSScrollView }.filter { !$0.isHidden }
         check(guideScrollViews.count == 2 && guideScrollViews.allSatisfy { $0.frame.height > 300 && $0.frame.width > 150 },
               "Guide reserves visible space for both the topic list and instructions")
         for topic in FeatureGuideTopic.allCases {
             guide.selectTopic(topic)
             let labels = descendants(guide.window.contentView!).compactMap { $0 as? NSTextField }.map(\.stringValue)
-            check(topic.steps.allSatisfy { labels.contains($0.detail) } && labels.contains(topic.tip),
-                  "Guide renders all steps and tip for \(topic.title)")
+            check(guide.practice?.topic == topic && guide.practice?.startButton.title == "开始练习" && labels.contains(topic.title),
+                  "Guide offers an interactive lesson for \(topic.title)")
         }
         guide.doneButton.performClick(nil)
         check(NSDictionary(dictionary: guideDefaults.dictionaryRepresentation()).isEqual(to: beforeGuide),
@@ -703,6 +703,124 @@ struct RegressionTests {
             }
         }
         reopenedGuide.window.close()
+        for topic in FeatureGuideTopic.allCases {
+            var progress = GuidePracticeProgress(topic: topic)
+            check(!progress.advance() && !progress.finished, "An unfinished exercise cannot be skipped for \(topic.title)")
+        }
+        var orderedPractice = GuidePracticeProgress(topic: .annotation)
+        check(!orderedPractice.accept(.copied), "Out-of-order actions cannot pass the current exercise")
+        for event in [GuidePracticeEvent.annotated, .undone, .redone, .copied] {
+            check(orderedPractice.accept(event) && orderedPractice.advance(), "Practice records successful actions in order")
+        }
+        check(orderedPractice.finished && !orderedPractice.advance(), "A completed lesson cannot advance past its end")
+        let practicePB = NSPasteboard.withUniqueName()
+        defer { practicePB.releaseGlobally() }
+        let practiceWindow = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 820, height: 700), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        practiceWindow.isReleasedWhenClosed = false
+        let practice = GuidePracticeView(topic: .annotation, pasteboard: practicePB)
+        practiceWindow.contentView = practice
+        practiceWindow.setContentSize(CGSize(width: 820, height: 700))
+        practice.startPractice()
+        let practiceEditor = practice.editor!
+        func dragInPractice(_ view: EditorView, from start: CGPoint, to end: CGPoint) {
+            for (type, point) in [(NSEvent.EventType.leftMouseDown, start), (.leftMouseDragged, end), (.leftMouseUp, end)] {
+                let event = NSEvent.mouseEvent(with: type, location: view.convert(point, to: nil), modifierFlags: [], timestamp: 0,
+                    windowNumber: practiceWindow.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+                switch type { case .leftMouseDown: view.mouseDown(with: event); case .leftMouseDragged: view.mouseDragged(with: event); default: view.mouseUp(with: event) }
+            }
+        }
+        let practiceSettingsBefore = UserDefaults.standard.dictionaryRepresentation()
+        practiceEditor.selectTool(.arrow); practiceEditor.setColor(.blue); practiceEditor.setWidth(4)
+        dragInPractice(practiceEditor, from: CGPoint(x: 100, y: 100), to: CGPoint(x: 350, y: 210))
+        check(practice.progress.stepCompleted && practice.nextButton.isEnabled, "Drawing with the real editor completes the annotation exercise")
+        check(NSDictionary(dictionary: UserDefaults.standard.dictionaryRepresentation()).isEqual(to: practiceSettingsBefore), "Practice style changes preserve daily settings")
+        practice.nextStep(); practiceEditor.undo()
+        check(practice.progress.stepCompleted && practiceEditor.editingSnapshot.annotations.isEmpty, "Real Undo completes the undo exercise")
+        practice.nextStep(); practiceEditor.redo()
+        check(practice.progress.stepCompleted && practiceEditor.editingSnapshot.annotations.count == 1, "Real Redo completes the redo exercise")
+        practice.nextStep(); practiceEditor.actionCopy()
+        check(practice.progress.stepCompleted && practicePB.data(forType: .png) != nil, "Practice copy produces an actual image on an isolated pasteboard")
+        practice.nextStep()
+        check(practice.progress.finished && practice.editor == nil, "Completing the lesson detaches the editor")
+        practice.dispose()
+        let pinsBeforePractice = PinManager.shared.controllers.count
+        let pinPractice = GuidePracticeView(topic: .pins, pasteboard: practicePB)
+        practiceWindow.contentView = pinPractice; practiceWindow.setContentSize(CGSize(width: 820, height: 700))
+        pinPractice.startPractice(); pinPractice.editor!.actionPin()
+        let trainingPin = pinPractice.practicePin!
+        check(pinPractice.progress.stepCompleted && PinManager.shared.controllers.count == pinsBeforePractice, "Practice pin is real and remains separate from the user's pin library")
+        pinPractice.nextStep()
+        trainingPin.window.setFrameOrigin(CGPoint(x: trainingPin.window.frame.minX + 40, y: trainingPin.window.frame.minY))
+        trainingPin.windowDidMove(Notification(name: NSWindow.didMoveNotification))
+        check(pinPractice.progress.stepCompleted, "Moving the real practice pin completes the move exercise")
+        pinPractice.nextStep(); trainingPin.zoom(1.2)
+        trainingPin.windowDidResize(Notification(name: NSWindow.didResizeNotification))
+        check(pinPractice.progress.stepCompleted, "Zooming the real practice pin completes the zoom exercise")
+        pinPractice.nextStep(); trainingPin.action("copy")
+        check(pinPractice.progress.stepCompleted && practicePB.data(forType: .png) != nil, "The practice pin's real copy action completes its exercise")
+        pinPractice.dispose()
+        check(!trainingPin.window.isVisible && PinManager.shared.controllers.count == pinsBeforePractice, "Closing practice removes its floating pin and preserves existing pins")
+        let recognitionPractice = GuidePracticeView(topic: .recognition, pasteboard: practicePB)
+        practiceWindow.contentView = recognitionPractice; practiceWindow.setContentSize(CGSize(width: 820, height: 700))
+        recognitionPractice.startPractice()
+        recognitionPractice.editor!.actionOCR()
+        for _ in 0..<600 where !recognitionPractice.progress.stepCompleted { try await Task.sleep(for: .milliseconds(50)) }
+        if !recognitionPractice.progress.stepCompleted { print("OCR practice status: " + recognitionPractice.feedback.stringValue) }
+        check(recognitionPractice.progress.stepCompleted, "The practice OCR exercise waits for actual Vision recognition")
+        recognitionPractice.nextStep()
+        descendants(recognitionPractice).compactMap { $0 as? NSButton }.first { $0.title == "复制识别文字" }!.performClick(nil)
+        check(recognitionPractice.progress.stepCompleted && (practicePB.string(forType: .string)?.contains("Scapare") ?? false), "Copying recognition exports the actual OCR text")
+        recognitionPractice.nextStep(); recognitionPractice.editor!.actionBarcode()
+        for _ in 0..<600 where !recognitionPractice.progress.stepCompleted { try await Task.sleep(for: .milliseconds(50)) }
+        check(recognitionPractice.progress.stepCompleted, "The practice QR exercise uses the real barcode recognizer")
+        recognitionPractice.nextStep()
+        descendants(recognitionPractice).compactMap { $0 as? NSButton }.first { $0.title == "复制二维码内容" }!.performClick(nil)
+        check(practicePB.string(forType: .string) == "Scapare practice 2026" && recognitionPractice.progress.stepCompleted, "QR practice copies its decoded payload")
+        recognitionPractice.dispose()
+        let advancedPractice = GuidePracticeView(topic: .advanced, pasteboard: practicePB)
+        practiceWindow.contentView = advancedPractice; practiceWindow.setContentSize(CGSize(width: 820, height: 700))
+        advancedPractice.startPractice()
+        let beforePracticeShortcut = UserDefaults.standard.dictionaryRepresentation()
+        let practiceRecorder = descendants(advancedPractice).compactMap { $0 as? ShortcutRecorder }.first!
+        practiceRecorder.accessibilityPerformPress()
+        let practiceFunctionKey = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: practiceWindow.windowNumber,
+            context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 122)!
+        practiceRecorder.keyDown(with: practiceFunctionKey)
+        check(advancedPractice.progress.stepCompleted, "Recording an actual shortcut completes its practice step")
+        advancedPractice.nextStep()
+        let themeChoice = descendants(advancedPractice).compactMap { $0 as? NSSegmentedControl }.first!
+        themeChoice.selectedSegment = 1
+        NSApp.sendAction(themeChoice.action!, to: themeChoice.target, from: themeChoice)
+        check(advancedPractice.progress.stepCompleted && advancedPractice.effectiveAppearance.name == .darkAqua, "Theme practice changes only its local appearance")
+        advancedPractice.nextStep()
+        check(advancedPractice.consumeShortcut(practiceFunctionKey) && advancedPractice.progress.stepCompleted && advancedPractice.editor != nil,
+              "The recorded practice shortcut opens a real selection editor")
+        check(NSDictionary(dictionary: UserDefaults.standard.dictionaryRepresentation()).isEqual(to: beforePracticeShortcut), "Practice shortcuts and themes leave saved settings unchanged")
+        advancedPractice.dispose()
+        let longPractice = GuidePracticeView(topic: .scrolling, pasteboard: practicePB)
+        practiceWindow.contentView = longPractice; practiceWindow.setContentSize(CGSize(width: 820, height: 700))
+        longPractice.startPractice(); longPractice.editor!.actionLongCapture()
+        let longCapture = longPractice.scrolling!
+        longCapture.panel.orderOut(nil); longCapture.regionOutline.orderOut(nil)
+        check(longPractice.progress.current == .scroll, "The real long-capture button opens the scrolling practice and advances its instruction")
+        try await Task.sleep(for: .milliseconds(200))
+        let practicePage = descendants(longPractice).compactMap { $0 as? NSScrollView }.first { ($0.documentView as? NSImageView)?.frame.height ?? 0 > 1000 }!
+        let initialPageY = practicePage.contentView.bounds.minY
+        for i in 1...16 {
+            practicePage.contentView.scroll(to: CGPoint(x: 0, y: initialPageY - CGFloat(i * 24)))
+            practicePage.reflectScrolledClipView(practicePage.contentView)
+            try await Task.sleep(for: .milliseconds(35))
+        }
+        for _ in 0..<100 where !longPractice.progress.stepCompleted { try await Task.sleep(for: .milliseconds(20)) }
+        check(longPractice.progress.stepCompleted, "Actual moving practice-page frames assemble into a longer image")
+        longCapture.finishAndCopy()
+        for _ in 0..<100 where longPractice.progress.current != .copyLong || !longPractice.progress.stepCompleted { try await Task.sleep(for: .milliseconds(30)) }
+        let copiedLong = NSBitmapImageRep(data: practicePB.data(forType: .png)!)!
+        check(longPractice.progress.current == .copyLong && longPractice.progress.stepCompleted && copiedLong.pixelsHigh > 350,
+              "Finishing the real scrolling controller copies a stitched practice image")
+        longPractice.dispose()
+        check(!longCapture.panel.isVisible && !longCapture.regionOutline.isVisible, "Leaving long-capture practice cleans up its panel and outline")
+        practiceWindow.close()
         let toolbar = descendants(editor).compactMap { $0 as? EditorToolbar }.first!
         let scrollButton = descendants(toolbar).compactMap { $0 as? NSButton }.first { $0.identifier?.rawValue == "scrolling-capture" }!
         scrollButton.performClick(nil)

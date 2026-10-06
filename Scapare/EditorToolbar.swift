@@ -176,7 +176,7 @@ final class EditorToolbar: NSView {
 
         stack.addArrangedSubview(separator())
 
-        if editor?.isLiveCapture == true {
+        if editor?.canStartLongCapture == true {
             let button = actionButton(symbol: "arrow.down.to.line.compact", tip: "滚动截图（在选区内向下滚动，自动拼接）", action: #selector(longCaptureTapped))
             button.identifier = NSUserInterfaceItemIdentifier("scrolling-capture")
             stack.addArrangedSubview(button)
@@ -418,7 +418,8 @@ final class EditorToolbar: NSView {
     private func presentHexColorPanel() {
         guard let values = AppDialogs.fields(title: "自定义颜色", labels: ["六位色值 #"], values: [editor?.strokeColor.hexString ?? "CC0000"]) else { return }
         guard let color = NSColor(hex: values[0]) else { AppDialogs.error("请输入六位十六进制色值，例如 CC0000。"); return }
-        SettingsManager.customColorHex = color.hexString; editor?.setColor(color); refreshHexColorButton()
+        if editor?.persistsPreferences != false { SettingsManager.customColorHex = color.hexString }
+        editor?.setColor(color); refreshHexColorButton()
     }
 }
 

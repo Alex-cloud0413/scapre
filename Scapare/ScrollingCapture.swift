@@ -23,6 +23,7 @@ final class ScrollingCaptureController: NSObject, NSWindowDelegate {
     let copyButton = NSButton(title: "完成并复制", target: nil, action: nil)
     private let assembler = ScrollCaptureAssembler()
     private var source: (any ScrollingCaptureSource)?
+    var onProgress: ((ScrollCaptureProgress) -> Void)?
     private enum FinishAction { case edit, copy }
     private var finishAction: FinishAction?
     private var loopEnded = false
@@ -162,6 +163,7 @@ final class ScrollingCaptureController: NSObject, NSWindowDelegate {
                     do {
                         let update = try await self.assembler.accept(raster)
                         guard !Task.isCancelled, !self.closed else { break }
+                        self.onProgress?(update)
                         self.progress.stringValue = "\(update.frameCount) 帧 · \(update.width) × \(update.height) px"
                         if let image = update.preview { self.preview.image = NSImage(cgImage: image, size: CGSize(width: image.width, height: image.height)) }
                         if self.finishAction == nil {

@@ -6,6 +6,7 @@ final class PinWindowController: NSObject, NSWindowDelegate {
     let window: PinWindow
     private let pinView: PinView
     var onChange: (() -> Void)?
+    var practiceAction: ((String) -> Void)?
     private var displayImage: NSImage?
     private var fullFrame: CGRect?
     private var gifSource: CGImageSource?
@@ -106,6 +107,7 @@ final class PinWindowController: NSObject, NSWindowDelegate {
         zoom(w / window.frame.width)
     }
     func action(_ action: String) {
+        if let practiceAction { practiceAction(action); return }
         switch action {
         case "copy": if let image = displayImage { Clipboard.copy(image: image) }
         case "file": if let image = displayImage { ImageFileSaver.copyAsFile(image) }
@@ -217,6 +219,9 @@ final class PinView: NSView, NSDraggingSource {
         return super.performKeyEquivalent(with: event)
     }
     override func keyDown(with event: NSEvent) {
+        if controller?.practiceAction != nil, [49, 53].contains(event.keyCode) {
+            if event.keyCode == 53 { controller?.action("hide") }; return
+        }
         switch event.keyCode {
         case 53: controller?.setHidden(true)
         case 49: controller?.edit()
@@ -244,6 +249,11 @@ final class PinView: NSView, NSDraggingSource {
             for (label, action) in actions { add(label, action, to: sub) }
             item.submenu = sub; menu.addItem(item)
         }
+        if controller?.practiceAction != nil {
+            add("复制", "copy", to: menu)
+            add("关闭练习贴图", "hide", to: menu)
+            return menu
+        }
         add("复制", "copy", to: menu); add("保存…", "save", to: menu); add("编辑 / 裁剪（空格）", "edit", to: menu)
         if controller?.record.sourceText != nil || controller?.record.sourceHTML != nil { add("编辑文字或色卡…", "source", to: menu) }
         group("输出", [("复制为文件", "file"), ("快速保存", "quick"), ("分享…", "share"), ("文字识别", "ocr"), ("识别条码", "barcode")])
@@ -263,6 +273,7 @@ final class PinView: NSView, NSDraggingSource {
     func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { .copy }
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { .copy }
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard controller?.practiceAction == nil else { return false }
         let pb = sender.draggingPasteboard
         if let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] {
             do { for url in urls { let data = try Data(contentsOf: url); PinManager.shared.add(try ImageInputs.decode(data), originalData: data) }; return true }

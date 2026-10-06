@@ -22,6 +22,12 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
 
     var onOutput: ((EditorOutput, NSImage) -> Void)?
     var onCancel: (() -> Void)?
+    var onSnapshotChange: ((EditSnapshot) -> Void)?
+    var copyColorOutput: ((String) -> Bool)?
+    var onColorCopied: (() -> Void)?
+    var onLongCapture: ((CGRect) -> Void)?
+    var persistsPreferences = true
+    var canStartLongCapture: Bool { isLiveCapture || onLongCapture != nil }
     var isLiveCapture = true
     private var externalToolbar = false
     private var raster: PixelRaster?
@@ -140,6 +146,7 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
         layoutToolbar()
         window?.invalidateCursorRects(for: self)
         needsDisplay = true
+        onSnapshotChange?(session.snapshot)
     }
     func setHistoryStatus(_ text: String) {
         historyLabel.stringValue = "  " + text + "  "
@@ -722,7 +729,7 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
         selectedAnnotationIndex = nil
         selectedIndices.removeAll()
         if currentAnnotation?.tool == .polyline { finishPolyline() }
-        if let activeTool { AppearanceSettings.remember(makeAnnotation(activeTool)) }
+        if persistsPreferences, let activeTool { AppearanceSettings.remember(makeAnnotation(activeTool)) }
         activeTool = (activeTool == tool) ? nil : tool
         if activeTool != nil {
             if let saved = AppearanceSettings.style(for: tool) { annotationStyle = saved; strokeColor = saved.color; strokeWidth = saved.lineWidth; textFontSize = saved.fontSize; textFontWeight = saved.fontWeight }
@@ -736,7 +743,7 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
 
     func setColor(_ color: NSColor) {
         strokeColor = color
-        if let activeTool { AppearanceSettings.remember(makeAnnotation(activeTool)) }
+        if persistsPreferences, let activeTool { AppearanceSettings.remember(makeAnnotation(activeTool)) }
         textView?.textColor = color
         toolbar?.refreshToolSelection()
         layoutToolbar()
@@ -744,12 +751,12 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
 
     func adjustOpacity(_ delta: CGFloat) {
         annotationStyle.opacity = max(0.05, min(1, annotationStyle.opacity + delta))
-        if let activeTool { AppearanceSettings.remember(makeAnnotation(activeTool)) }
+        if persistsPreferences, let activeTool { AppearanceSettings.remember(makeAnnotation(activeTool)) }
         setHistoryStatus("标注不透明度 \(Int(annotationStyle.opacity * 100))%")
     }
     func setWidth(_ width: CGFloat) {
         strokeWidth = width
-        if let activeTool { AppearanceSettings.remember(makeAnnotation(activeTool)) }
+        if persistsPreferences, let activeTool { AppearanceSettings.remember(makeAnnotation(activeTool)) }
     }
 
     func setTextFontSize(_ size: CGFloat) {
@@ -1064,7 +1071,11 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
         session.commit(from: previous); selectedIndices = selected; selectedAnnotationIndex = primary
     }
     private func copyColor() {
-        if let p = hoverPoint, let c = getPixelColor(at: p) { Clipboard.copy(text: "#" + c.hexString); setHistoryStatus("已复制 #" + c.hexString) }
+        guard let point = hoverPoint, let color = getPixelColor(at: point) else { return }
+        let text = "#" + color.hexString
+        let copied = copyColorOutput?(text) ?? Clipboard.copy(text: text)
+        if copied { setHistoryStatus("已复制 " + text); onColorCopied?() }
+        else { setHistoryStatus("复制颜色失败，请重试。") }
     }
     private func drawMagnifier(at point: CGPoint) {
         let options = AppearanceSettings.options
@@ -1088,24 +1099,33 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
         SettingsManager.rememberRegion(selection, displayID: id)
     }
     func actionLongCapture() {
-        guard isLiveCapture else { return }
+        guard canStartLongCapture else { return }
         guard let selection, selection.width >= 32, selection.height >= 64 else {
             setHistoryStatus("选区太小，无法滚动截图。请扩大到至少 32 × 64 点，并避开固定页眉。")
             return
         }
         finishPendingEditing()
-        controller?.startLongCapture(on: shot.screen, selection: selection)
+        if let onLongCapture { onLongCapture(selection) }
+        else { controller?.startLongCapture(on: shot.screen, selection: selection) }
     }
-    func actionBarcode() { guard let image = renderResult() else { return }; OCRResultController.present(image: image, barcode: true) }
-    func actionQuickSave() { guard let image = renderResult() else { return }; if ImageFileSaver.quickSave(image) { setHistoryStatus("已快速保存") } }
+    func actionBarcode() {
+        guard let image = renderResult() else { return }
+        if let onOutput { onOutput(.barcode, image) } else { OCRResultController.present(image: image, barcode: true) }
+    }
+    func actionQuickSave() {
+        guard let image = renderResult() else { return }
+        if let onOutput { onOutput(.quickSave, image) }
+        else if ImageFileSaver.quickSave(image) { setHistoryStatus("已快速保存") }
+    }
     func actionShare() {
         guard let image = renderResult() else { return }
-        NSSharingServicePicker(items: [image]).show(relativeTo: toolbarScroll?.frame ?? visibleRect, of: self, preferredEdge: .minY)
+        if let onOutput { onOutput(.share, image) }
+        else { NSSharingServicePicker(items: [image]).show(relativeTo: toolbarScroll?.frame ?? visibleRect, of: self, preferredEdge: .minY) }
     }
     func showStyleOptions() {
         let initial = selectedAnnotationIndex.flatMap { annotations.indices.contains($0) ? annotations[$0] : nil } ?? makeAnnotation(activeTool ?? .rectangle)
         guard let changed = AnnotationInspector.edit(initial) else { return }
-        AppearanceSettings.remember(changed)
+        if persistsPreferences { AppearanceSettings.remember(changed) }
         annotationStyle = changed; strokeColor = changed.color; strokeWidth = changed.lineWidth; textFontSize = changed.fontSize; textFontWeight = changed.fontWeight
         if let i = selectedAnnotationIndex, annotations.indices.contains(i) {
             let previous = session.snapshot
@@ -1147,7 +1167,7 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
         decoration = ImageDecoration(cornerRadius: radius, borderWidth: border, shadow: values[2] == "1")
         setHistoryStatus("导出效果已设置：内容尺寸不含边框与阴影留白")
     }
-    @objc private func unitCommand() { UserDefaults.standard.set(!UserDefaults.standard.bool(forKey: "selection_in_points"), forKey: "selection_in_points"); needsDisplay = true }
+    @objc private func unitCommand() { guard persistsPreferences else { return }; UserDefaults.standard.set(!UserDefaults.standard.bool(forKey: "selection_in_points"), forKey: "selection_in_points"); needsDisplay = true }
     @objc private func sizeCommand() {
         let current = selection ?? bounds
         let scale = UserDefaults.standard.bool(forKey: "selection_in_points") ? 1 : CGFloat(shot.image.width) / bounds.width

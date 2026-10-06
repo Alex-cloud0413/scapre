@@ -148,7 +148,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settings.target = self
         menu.addItem(settings)
 
-        add("功能引导…", #selector(showFeatureGuideAction))
+        add("功能引导", #selector(showFeatureGuideAction))
 
         let about = NSMenuItem(title: "关于 Scapare",
                                action: #selector(showAboutAction),
@@ -194,6 +194,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         PinManager.shared.saveNow(); AutomationController.shared.stop(); gestureMonitor?.stop(); hotCornerMonitor?.stop()
     }
     private func handleLocalShortcut(_ event: NSEvent) -> NSEvent? {
+        if FeatureGuideController.consumePracticeShortcut(event) { return nil }
         let responder = NSApp.keyWindow?.firstResponder
         guard !(responder is NSTextView), !(responder is ShortcutRecorder), !(responder is EditorView), NSApp.modalWindow == nil else { return event }
         // Standard in-app edit and document commands keep their native meaning.

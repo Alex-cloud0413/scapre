@@ -61,9 +61,9 @@ enum Clipboard {
     }
 
     // 把一段文字放进系统剪贴板。
-    static func copy(text: String) {
-        let pb = NSPasteboard.general
+    @discardableResult
+    static func copy(text: String, to pb: NSPasteboard = .general) -> Bool {
         pb.clearContents()
-        pb.setString(text, forType: .string)
+        return pb.setString(text, forType: .string)
     }
 }
