@@ -99,7 +99,7 @@ enum ScrollingScenarioTests {
         return passed
     }
 
-    @MainActor private static func document(width: Int, height: Int, scale: Int, style: String) throws -> PixelRaster {
+    @MainActor static func document(width: Int, height: Int, scale: Int, style: String) throws -> PixelRaster {
         let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height,
             bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
             colorSpaceName: .deviceRGB, bytesPerRow: width * 4, bitsPerPixel: 32)!

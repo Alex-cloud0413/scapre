@@ -17,8 +17,9 @@ final class ScrollingCaptureController: NSObject, NSWindowDelegate {
     let status = NSTextField(wrappingLabelWithString: "正在准备，请稍候…")
     let finishButton = NSButton(title: "完成并编辑", target: nil, action: nil)
     private let pauseButton = NSButton(title: "暂停", target: nil, action: nil)
+    let pageButton = NSButton(title: "切换页面", target: nil, action: nil)
     private let preview = NSImageView()
-    private let progress = NSTextField(labelWithString: "")
+    private let progress = NSTextField(wrappingLabelWithString: "")
     private var task: Task<Void, Never>?
     let copyButton = NSButton(title: "完成并复制", target: nil, action: nil)
     private let assembler = ScrollCaptureAssembler()
@@ -29,6 +30,10 @@ final class ScrollingCaptureController: NSObject, NSWindowDelegate {
     private var loopEnded = false
     private var delivering = false
     private var paused = false
+    private var waitingForPage = false
+    private var transitionBusy = false
+    private var transitionTask: Task<Void, Never>?
+    private var lastProgress: ScrollCaptureProgress?
     private var closed = false
     private let onClose: () -> Void
     private let onFinish: @MainActor (CGImage) -> Void
@@ -53,7 +58,7 @@ final class ScrollingCaptureController: NSObject, NSWindowDelegate {
         self.onCopy = onCopy
         self.makeSource = makeSource ?? { try await RegionCaptureSource(screen: screen, selection: selection) }
         let region = selection.offsetBy(dx: screen.frame.minX, dy: screen.frame.minY)
-        panel = NSPanel(contentRect: CGRect(origin: .zero, size: CGSize(width: 440, height: 240)),
+        panel = NSPanel(contentRect: CGRect(origin: .zero, size: CGSize(width: 440, height: 264)),
                         styleMask: [.titled, .closable, .nonactivatingPanel], backing: .buffered, defer: false)
         regionOutline = NSPanel(contentRect: region.insetBy(dx: -3, dy: -3), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         super.init()
@@ -79,7 +84,7 @@ final class ScrollingCaptureController: NSObject, NSWindowDelegate {
         outline.layer?.borderWidth = 3
         regionOutline.contentView = outline
 
-        let hint = NSTextField(wrappingLabelWithString: "在框内自然向下滚动，画面会连续拼接。完成后可直接复制，或继续编辑。")
+        let hint = NSTextField(wrappingLabelWithString: "支持上下滚动。换页时点「切换页面」，跳转后点「继续追加」，最后合为一张长图。")
         hint.font = .systemFont(ofSize: 12)
         hint.textColor = .secondaryLabelColor
         status.font = .systemFont(ofSize: 13, weight: .medium)
@@ -100,7 +105,12 @@ final class ScrollingCaptureController: NSObject, NSWindowDelegate {
         copyButton.isEnabled = false
         copyButton.toolTip = "结束滚动并复制长图，可直接粘贴到其他应用"
         copyButton.keyEquivalent = "\r"
-        let auxiliaryButtons = NSStackView(views: [cancel, pauseButton])
+        copyButton.bezelColor = .controlAccentColor
+        copyButton.contentTintColor = .white
+        pageButton.target = self; pageButton.action = #selector(togglePageTransition)
+        pageButton.isEnabled = false
+        pageButton.toolTip = "暂停采集以切换界面，再点继续追加；每页可上下滚动，按页面顺序合并"
+        let auxiliaryButtons = NSStackView(views: [cancel, pauseButton, pageButton])
         auxiliaryButtons.spacing = 8
         let buttons = NSStackView(views: [finishButton, copyButton])
         buttons.spacing = 8
@@ -123,12 +133,14 @@ final class ScrollingCaptureController: NSObject, NSWindowDelegate {
             content.addSubview(preview)
             NSLayoutConstraint.activate([
                 content.widthAnchor.constraint(equalToConstant: 440),
-                content.heightAnchor.constraint(equalToConstant: 240),
+                content.heightAnchor.constraint(equalToConstant: 264),
                 stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
                 stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 16),
                 stack.trailingAnchor.constraint(equalTo: preview.leadingAnchor, constant: -16),
+                stack.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -16),
                 hint.widthAnchor.constraint(equalTo: stack.widthAnchor),
                 status.widthAnchor.constraint(equalTo: stack.widthAnchor),
+                progress.widthAnchor.constraint(equalTo: stack.widthAnchor),
                 preview.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
                 preview.topAnchor.constraint(equalTo: content.topAnchor, constant: 16),
                 preview.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -16),
@@ -151,6 +163,10 @@ final class ScrollingCaptureController: NSObject, NSWindowDelegate {
                 let source = try await self.makeSource()
                 self.source = source
                 guard !Task.isCancelled, !self.closed else { await source.stop(); return }
+                if self.finishAction != nil {
+                    await source.stop(); self.loopEnded = true
+                    await self.deliverResult(); return
+                }
                 let frames = try await source.frames()
                 var lastDisplayCheck = ContinuousClock.now
                 for try await raster in frames {
@@ -163,13 +179,16 @@ final class ScrollingCaptureController: NSObject, NSWindowDelegate {
                     do {
                         let update = try await self.assembler.accept(raster)
                         guard !Task.isCancelled, !self.closed else { break }
+                        self.lastProgress = update
                         self.onProgress?(update)
-                        self.progress.stringValue = "\(update.frameCount) 帧 · \(update.width) × \(update.height) px"
+                        self.progress.stringValue = "累计 \(update.pageCount) 页 · \(update.frameCount) 帧\n长图 \(update.width) × \(update.height) px"
                         if let image = update.preview { self.preview.image = NSImage(cgImage: image, size: CGSize(width: image.width, height: image.height)) }
                         if self.finishAction == nil {
                             self.finishButton.isEnabled = true; self.copyButton.isEnabled = true
-                            self.pauseButton.isEnabled = true
-                            self.status.stringValue = self.paused ? "已暂停，已拼接内容会保留" : "正在连续拼接，可直接完成并复制"
+                            self.pauseButton.isEnabled = !self.waitingForPage && !self.transitionBusy
+                            self.pageButton.isEnabled = !self.transitionBusy
+                            self.status.stringValue = self.waitingForPage ? "切换目标页面后点「继续追加」" :
+                                (self.paused ? "已暂停，已拼接内容会保留" : "正在双向拼接，可直接完成并复制")
                         }
                     } catch {
                         self.status.stringValue = error.localizedDescription
@@ -180,7 +199,7 @@ final class ScrollingCaptureController: NSObject, NSWindowDelegate {
                     }
                 }
             } catch {
-                if !Task.isCancelled, !self.closed {
+                if !Task.isCancelled, !self.closed, self.finishAction == nil {
                     self.status.stringValue = "捕获已停止：" + error.localizedDescription
                     self.pauseButton.isEnabled = false
                 }
@@ -192,17 +211,50 @@ final class ScrollingCaptureController: NSObject, NSWindowDelegate {
     }
 
     @objc private func togglePause() {
+        guard !waitingForPage, !transitionBusy, !closed, finishAction == nil else { return }
         paused.toggle()
         pauseButton.title = paused ? "继续" : "暂停"
         status.stringValue = paused ? "已暂停，已拼接内容会保留" : "正在连续拼接"
+    }
+    /// Seal and drain the old source before starting a fresh one. This excludes
+    /// navigation frames and stale buffered samples from the next page without
+    /// depending on an arbitrary delay or guessing that a failed match is a page.
+    @objc func togglePageTransition() {
+        guard !closed, finishAction == nil, !transitionBusy, pageButton.isEnabled, source != nil, lastProgress != nil else { return }
+        transitionBusy = true; pageButton.isEnabled = false; pauseButton.isEnabled = false
+        if !waitingForPage {
+            waitingForPage = true; paused = true
+            pageButton.title = "继续追加"
+            status.stringValue = "正在暂停采集；可切换到目标页面"
+            let oldSource = source, oldTask = task
+            transitionTask = Task { [weak self] in
+                await oldSource?.stop()
+                await oldTask?.value
+                guard let self, !self.closed, self.finishAction == nil else { return }
+                self.transitionBusy = false; self.pageButton.isEnabled = true
+                self.status.stringValue = "切换目标页面后点「继续追加」"
+            }
+        } else {
+            status.stringValue = "正在准备新页面…"
+            transitionTask = Task { [weak self] in
+                guard let self else { return }
+                await self.assembler.beginNewPage()
+                guard !Task.isCancelled, !self.closed, self.finishAction == nil else { return }
+                self.task = nil; self.source = nil; self.loopEnded = false
+                self.waitingForPage = false; self.paused = false; self.transitionBusy = false
+                self.pageButton.title = "切换页面"; self.pageButton.isEnabled = false
+                self.pauseButton.title = "暂停"
+                self.run()
+            }
+        }
     }
     @objc func finish() { requestFinish(.edit) }
     @objc func finishAndCopy() { requestFinish(.copy) }
     private func requestFinish(_ action: FinishAction) {
         guard !closed, finishAction == nil else { return }
         finishAction = action
-        paused = false
-        finishButton.isEnabled = false; copyButton.isEnabled = false; pauseButton.isEnabled = false
+        if !waitingForPage { paused = false }
+        finishButton.isEnabled = false; copyButton.isEnabled = false; pauseButton.isEnabled = false; pageButton.isEnabled = false
         status.stringValue = "正在处理最后的画面…"
         // Finish the stream, then drain already delivered frames before exporting.
         // Cancelling the consumer here would silently lose the last scroll movement.
@@ -227,7 +279,7 @@ final class ScrollingCaptureController: NSObject, NSWindowDelegate {
             if onCopy(image) { close() }
             else {
                 delivering = false; finishAction = nil
-                finishButton.isEnabled = true; copyButton.isEnabled = true
+                finishButton.isEnabled = true; copyButton.isEnabled = true; pageButton.isEnabled = !transitionBusy
                 status.stringValue = "复制失败，长图仍然保留。可以重试或打开编辑器保存。"
             }
         case .edit: close(); onFinish(image)
@@ -237,6 +289,7 @@ final class ScrollingCaptureController: NSObject, NSWindowDelegate {
     func close() {
         guard !closed else { return }
         closed = true
+        transitionTask?.cancel(); transitionTask = nil
         task?.cancel()
         task = nil
         if let source { Task { await source.stop() } }

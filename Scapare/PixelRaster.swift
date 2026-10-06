@@ -63,12 +63,16 @@ nonisolated struct ScrollStitcher: Sendable {
     private(set) var previous: PixelRaster
     private var features: ScrollFeatures
     private var position = 0.0
+    private var earliestPosition = 0
     private var furthestPosition = 0
+    private var leadingStrips: [PixelRaster] = []
+    private var header: PixelRaster?
     private var recent: (raster: PixelRaster, features: ScrollFeatures, position: Double)?
     private(set) var recoveredMatches = 0
     private var didSetFixedEdges = false
     private var fixedTop = 0
     private var fixedBottom = 0
+    private var headerHeight = 0
     private var footerHeight = 0
     private var footer: PixelRaster?
     private(set) var height: Int
@@ -81,13 +85,14 @@ nonisolated struct ScrollStitcher: Sendable {
     mutating func append(_ next: PixelRaster) throws -> Bool {
         let nextFeatures = ScrollFeatures(next)
         guard next.width == previous.width, next.height == previous.height else { throw ImageError.incompatible }
-        var top = fixedTop, bottom = fixedBottom, outputBottom = footerHeight
+        var top = fixedTop, bottom = fixedBottom, outputTop = headerHeight, outputBottom = footerHeight
         if !didSetFixedEdges, !ScrollMatcher.isUnchanged(previous, next) {
             let edges = ScrollMatcher.fixedEdges(features, nextFeatures)
             top = edges.top; bottom = edges.bottom
             // Partial-width decorations belong to the output footer, but the
             // moving text between them remains valid evidence for alignment.
-            outputBottom = ScrollMatcher.fixedEdges(previous, next, previousFeatures: features, nextFeatures: nextFeatures).bottom
+            let decorations = ScrollMatcher.fixedEdges(previous, next, previousFeatures: features, nextFeatures: nextFeatures)
+            outputTop = decorations.top; outputBottom = decorations.bottom
         }
         let nextPosition: Double
         var recovered = false
@@ -116,21 +121,25 @@ nonisolated struct ScrollStitcher: Sendable {
         }
         let shift = nextPosition - position
         guard shift != 0 else { return false }
-        let newRows = max(0, Int(nextPosition.rounded()) - furthestPosition)
-        guard newRows <= next.height - top - outputBottom else { throw ImageError.noOverlap }
+        let roundedPosition = Int(nextPosition.rounded())
+        let prependRows = max(0, earliestPosition - roundedPosition)
+        let appendRows = max(0, roundedPosition - furthestPosition)
+        let newRows = prependRows + appendRows
+        let contentHeight = next.height - outputTop - outputBottom
+        guard prependRows <= contentHeight, appendRows <= contentHeight else { throw ImageError.noOverlap }
         guard height + newRows <= maxHeight, (height + newRows) * next.width <= 60_000_000 else { throw ImageError.tooLarge }
-        // A fixed footer belongs once, at the end, rather than in every new strip.
-        if !didSetFixedEdges, outputBottom > 0 {
+        // Fixed chrome belongs once at the two document ends. When capture
+        // expands upward, the header must stay above the newly discovered rows.
+        if !didSetFixedEdges {
             let first = strips[0]
-            strips = [first.rows(0..<(previous.height - outputBottom))]
-            footer = first.rows((first.height - outputBottom)..<first.height)
+            strips = [first.rows(outputTop..<(first.height - outputBottom))]
+            if outputTop > 0 { header = first.rows(0..<outputTop) }
+            if outputBottom > 0 { footer = first.rows((first.height - outputBottom)..<first.height) }
         }
         didSetFixedEdges = true
-        fixedTop = top; fixedBottom = bottom
-        footerHeight = outputBottom
-        // A reserved footer can contain moving text between fixed corners.
-        // Keep it from the furthest captured position when the user backscrolls.
-        if outputBottom > 0, Int(nextPosition.rounded()) >= furthestPosition {
+        fixedTop = top; fixedBottom = bottom; headerHeight = outputTop; footerHeight = outputBottom
+        if outputTop > 0, roundedPosition <= earliestPosition { header = next.rows(0..<outputTop) }
+        if outputBottom > 0, roundedPosition >= furthestPosition {
             footer = next.rows((next.height - outputBottom)..<next.height)
         }
         // Match against a keyframe for many updates, instead of rounding and
@@ -141,23 +150,45 @@ nonisolated struct ScrollStitcher: Sendable {
         recent = (next, nextFeatures, nextPosition)
         if recovered { recoveredMatches += 1 }
         guard newRows > 0 else { return false }
-        strips.append(next.rows((next.height - outputBottom - newRows)..<(next.height - outputBottom)))
-        furthestPosition = Int(nextPosition.rounded())
+        if prependRows > 0 {
+            leadingStrips.append(next.rows(outputTop..<(outputTop + prependRows)))
+            earliestPosition = roundedPosition
+        }
+        if appendRows > 0 {
+            strips.append(next.rows((next.height - outputBottom - appendRows)..<(next.height - outputBottom)))
+            furthestPosition = roundedPosition
+        }
         height += newRows; frameCount += 1
         return true
     }
-    private var outputStrips: [PixelRaster] { strips + (footer.map { [$0] } ?? []) }
+    var result: ScrollImagePieces {
+        ScrollImagePieces(width: previous.width,
+            strips: (header.map { [$0] } ?? []) + Array(leadingStrips.reversed()) + strips + (footer.map { [$0] } ?? []))
+    }
+    func image() -> CGImage? { result.image() }
+    func preview(maxSize: CGSize) -> CGImage? { result.preview(maxSize: maxSize) }
+}
+
+/// Retains original strips without flattening completed pages into a second full
+/// image. Used by both one-page stitching and ordered cross-page composition.
+nonisolated struct ScrollImagePieces: Sendable {
+    let width: Int
+    let strips: [PixelRaster]
+    var height: Int { strips.reduce(0) { $0 + $1.height } }
     func image() -> CGImage? {
-        PixelRaster(width: previous.width, height: height, bytes: outputStrips.flatMap(\.bytes)).image()
+        guard height > 0 else { return nil }
+        return PixelRaster(width: width, height: height, bytes: strips.flatMap(\.bytes)).image()
     }
     func preview(maxSize: CGSize) -> CGImage? {
-        let scale = min(1, maxSize.width / CGFloat(previous.width), maxSize.height / CGFloat(height))
-        let w = max(1, Int(CGFloat(previous.width) * scale)), h = max(1, Int(CGFloat(height) * scale))
+        let height = height
+        guard height > 0 else { return nil }
+        let scale = min(1, maxSize.width / CGFloat(width), maxSize.height / CGFloat(height))
+        let w = max(1, Int(CGFloat(width) * scale)), h = max(1, Int(CGFloat(height) * scale))
         guard let context = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
                                       space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
         context.interpolationQuality = .high
         var top = 0
-        for strip in outputStrips {
+        for strip in strips {
             guard let image = strip.image() else { return nil }
             let bottom = top + strip.height
             let y0 = CGFloat(height - bottom) * CGFloat(h) / CGFloat(height)

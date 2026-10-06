@@ -181,8 +181,7 @@ struct RegressionTests {
         let stitchedHeight = stitcher.height
         do { _ = try stitcher.append(page.rows(500..<740)); fatalError("Unmatched scroll accepted") }
         catch { check(stitcher.height == stitchedHeight, "Excessive scroll leaves the completed long capture intact") }
-        do { _ = try ScrollMatcher.match(frame2, frame1); fatalError("Reverse scroll accepted") }
-        catch { check(true, "Reverse scrolling is not silently appended") }
+        try check(try ScrollMatcher.match(frame2, frame1) == .retreat(80), "Reverse scrolling reports a verified upward displacement")
         var limited = ScrollStitcher(first: frame1, maxHeight: 260)
         do { _ = try limited.append(frame2); fatalError("Long capture exceeded its limit") }
         catch { check(limited.height == 240, "Long capture enforces its length limit without losing previous frames") }
@@ -450,6 +449,7 @@ struct RegressionTests {
         }
 
         passed += try ScrollingScenarioTests.run()
+        passed += try await BidirectionalCaptureTests.run()
         passed += try WindowEdgeRegressionTests.run()
         let turned = try ImageTransform.apply(frame1.image()!, quarterTurns: 1, flipHorizontal: false, flipVertical: false)
         check(turned.width == 240 && turned.height == 96, "Pin rotation swaps dimensions")
@@ -933,7 +933,7 @@ struct RegressionTests {
                 try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: renderPath).appendingPathComponent("scroll-panel.png"))
             }
         }
-        check(scrolling.panel.contentView!.frame.size == CGSize(width: 440, height: 240), "Live preview cannot enlarge the control panel off-screen")
+        check(scrolling.panel.contentView!.frame.size == CGSize(width: 440, height: 264), "Live preview cannot enlarge the control panel off-screen")
         scrolling.finishButton.performClick(nil)
         for _ in 0..<100 { if finishedImage != nil { break }; try await Task.sleep(for: .milliseconds(20)) }
         let completed = try finishedImage.map(PixelRaster.init)

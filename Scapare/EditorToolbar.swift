@@ -177,7 +177,7 @@ final class EditorToolbar: NSView {
         stack.addArrangedSubview(separator())
 
         if editor?.canStartLongCapture == true {
-            let button = actionButton(symbol: "arrow.down.to.line.compact", tip: "滚动截图（在选区内向下滚动，自动拼接）", action: #selector(longCaptureTapped))
+            let button = actionButton(symbol: "arrow.down.to.line.compact", tip: "滚动截图（在选区内上下滚动，可切换页面追加）", action: #selector(longCaptureTapped))
             button.identifier = NSUserInterfaceItemIdentifier("scrolling-capture")
             stack.addArrangedSubview(button)
         }

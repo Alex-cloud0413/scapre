@@ -1,6 +1,6 @@
 import Foundation
 
-nonisolated enum ScrollMatch: Equatable { case unchanged, advance(Int) }
+nonisolated enum ScrollMatch: Equatable { case unchanged, advance(Int), retreat(Int) }
 
 /// Row descriptors are calculated once per image. Search uses textured rows;
 /// blank margins cannot vote for an arbitrary scroll distance.
@@ -72,7 +72,7 @@ nonisolated enum ScrollMatcher {
 
     static func match(_ previous: PixelRaster, _ next: PixelRaster) throws -> ScrollMatch {
         let shift = try displacement(previous, next)
-        guard shift >= 0 else { throw ImageError.noOverlap }
+        if shift < 0 { return .retreat(-shift) }
         return shift == 0 ? .unchanged : .advance(shift)
     }
 
@@ -316,32 +316,35 @@ nonisolated enum ScrollMatcher {
                            previousFeatures a: ScrollFeatures, nextFeatures b: ScrollFeatures) -> (top: Int, bottom: Int) {
         let sampled = fixedEdges(a, b)
         // The motion descriptor deliberately ignores the outermost columns.
-        // Window and pane corners often exist ONLY there, while the center of
+        // Window and pane corners at either end often exist ONLY there, while the center of
         // the same rows is scrolling content. Inspect every column for stable
         // vertical edge profiles, rather than requiring a stationary full row.
         // This inset controls rendering, not the matching search region.
         let limit = previous.height / 5, width = previous.width
-        var bottom = sampled.bottom
-        for x in 0..<width {
-            var contrast = 0, lastEdge = 0, stableRows = 0
-            for depth in 0..<limit {
-                let y = previous.height - 1 - depth, i = (y * width + x) * 4
-                var change = 0
-                for c in 0..<4 { change = max(change, abs(Int(previous.bytes[i+c]) - Int(next.bytes[i+c]))) }
-                if change > 1 { break }
-                stableRows += 1
-                if depth > 0 {
-                    var gradient = 0
-                    for c in 0..<4 { gradient = max(gradient, abs(Int(previous.bytes[i+c]) - Int(previous.bytes[i + width * 4+c]))) }
-                    if gradient > 2 { contrast += gradient; lastEdge = depth + 1 }
-                    else if lastEdge > 0, depth - lastEdge >= max(8, previous.height / 100) { break }
+        func decoration(top: Bool, sampled: Int) -> Int {
+            var length = sampled
+            for x in 0..<width {
+                var contrast = 0, lastEdge = 0, stableRows = 0
+                for depth in 0..<limit {
+                    let y = top ? depth : previous.height - 1 - depth
+                    let i = (y * width + x) * 4
+                    var change = 0
+                    for c in 0..<4 { change = max(change, abs(Int(previous.bytes[i+c]) - Int(next.bytes[i+c]))) }
+                    if change > 1 { break }
+                    stableRows += 1
+                    if depth > 0 {
+                        let neighbor = i + (top ? -width * 4 : width * 4)
+                        var gradient = 0
+                        for c in 0..<4 { gradient = max(gradient, abs(Int(previous.bytes[i+c]) - Int(previous.bytes[neighbor+c]))) }
+                        if gradient > 2 { contrast += gradient; lastEdge = depth + 1 }
+                        else if lastEdge > 0, depth - lastEdge >= max(8, previous.height / 100) { break }
+                    }
                 }
+                if stableRows >= 3 && contrast >= 12 { length = max(length, lastEdge) }
             }
-            // Flat margins carry no edge evidence. A single low-level pixel
-            // fluctuation is also insufficient to reserve an entire footer.
-            if stableRows >= 3 && contrast >= 12 { bottom = max(bottom, lastEdge) }
+            return length
         }
-        return (sampled.top, bottom)
+        return (decoration(top: true, sampled: sampled.top), decoration(top: false, sampled: sampled.bottom))
     }
 
     static func fixedEdges(_ a: ScrollFeatures, _ b: ScrollFeatures) -> (top: Int, bottom: Int) {
