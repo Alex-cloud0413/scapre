@@ -17,3 +17,12 @@
 - 原生窗口截图检查当前任务、工具高亮、文本可读性与布局。自动测试使用独立剪贴板，不覆盖日常剪贴板。
 
 本轮不推送 GitHub、不更换 App Store 待审核版本。直接分发与本机安装结果另存于 `Scapare-Backups/DirectDistribution/1.1.9-build14/` 的 receipt.json。
+
+## 直接分发
+
+- 用户明确确认发送安装包给 Apple 公证服务后，Developer ID 分发 App 已通过公证，票据已附在 App 内。
+- 签名校验、票据验证、Gatekeeper 与 `syspolicy_check distribution` 均通过；从 DMG 复制并添加下载隔离标记的 App 同样通过。
+- 正式 DMG：`/Users/gaoyiming/Desktop/Scapare-1.1.9-14.dmg`，1,002,547 字节。
+- DMG SHA-256：`ed07ef03e301bad65499f47242403e378f8b50e0f98ca51e965f46b67eb60507`。
+- 包内只有公证后的 Scapare.app、Applications 链接和安装说明。支持 macOS 14 起，包含 Apple Silicon 与 Intel 架构。
+- 本机安装同一份公证 App，旧候选版移入废纸篓；源码、分发包和验证记录保存于直接分发恢复目录。未推送 GitHub，未提交 App Store。
