@@ -14,7 +14,7 @@ final class GestureMonitor {
         let wanted: NSEvent.ModifierFlags = UserDefaults.standard.integer(forKey: "gesture_chord") == 1 ? [.option, .shift] : [.control, .option]
         let held = UserDefaults.standard.bool(forKey: "gesture_enabled") && flags == wanted
         if !held { began = nil; triggered = false; return }
-        guard !triggered, !NSApp.isActive, !ShortcutPolicy.isIgnored, NSEvent.pressedMouseButtons == 0 else { return }
+        guard !triggered, !ShortcutPolicy.ownsKeyboardFocus, !ShortcutPolicy.isIgnored, NSEvent.pressedMouseButtons == 0 else { return }
         if began == nil { began = Date() }
         if Date().timeIntervalSince(began!) >= 0.3 { triggered = true; CaptureController.shared.startCapture() }
     }
@@ -27,8 +27,9 @@ enum ShortcutPolicy {
         set { UserDefaults.standard.set(newValue, forKey: "shortcut_ignored_apps"); refresh() }
     }
     static var isIgnored: Bool { NSWorkspace.shared.frontmostApplication?.bundleIdentifier.map { ignoredApps.contains($0) } ?? false }
+    static var ownsKeyboardFocus: Bool { NSApp.isActive || NSApp.keyWindow?.isKeyWindow == true }
     static func refresh() {
-        if NSApp.isActive || isIgnored { GlobalHotKey.pauseAll() } else { GlobalHotKey.resumeAll() }
+        if ownsKeyboardFocus || isIgnored { GlobalHotKey.pauseAll() } else { GlobalHotKey.resumeAll() }
     }
 }
 

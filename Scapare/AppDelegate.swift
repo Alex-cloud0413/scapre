@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusMenu: NSMenu?
     private var workspaceObserver: NSObjectProtocol?
     private var appearanceObserver: NSObjectProtocol?
+    private var keyWindowObservers: [NSObjectProtocol] = []
     private var hotCornerMonitor: HotCornerMonitor?
     private let hotKey = ShortcutBinding<GlobalHotKey>()
     private var statusItem: NSStatusItem?
@@ -26,6 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
         SettingsManager.initializeDefaults()
         AppearanceSettings.migrateBrandIcon()
+        AppearanceSettings.migrateCaptureMagnifier()
 
         AppearanceSettings.applyTheme()
         setupStatusItem()
@@ -36,6 +38,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AutomationController.shared.restore()
         workspaceObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { _ in MainActor.assumeIsolated { ShortcutPolicy.refresh() } }
         appearanceObserver = NotificationCenter.default.addObserver(forName: AppearanceSettings.changed, object: nil, queue: .main) { [weak self] _ in MainActor.assumeIsolated { self?.refreshAppearance() } }
+        // Capture panels can own keyboard focus while the source app remains
+        // active. Pause global bindings for that interval just as for our editors.
+        keyWindowObservers = [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification].map { name in
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { _ in
+                MainActor.assumeIsolated { ShortcutPolicy.refresh() }
+            }
+        }
         ShortcutPolicy.refresh()
         localKeys = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             var consumed = false
@@ -75,7 +84,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         try hotKey.replace(with: candidate, register: { shortcut in
             try GlobalHotKey(keyCode: shortcut.keyCode, modifiers: shortcut.modifiers) {
                 // A configured global shortcut must not interrupt in-app text entry/recording.
-                if NSApp.isActive && (NSApp.keyWindow?.firstResponder is NSTextView
+                if ShortcutPolicy.ownsKeyboardFocus && (NSApp.keyWindow?.firstResponder is NSTextView
                     || NSApp.keyWindow?.firstResponder is ShortcutRecorder) { return }
                 CaptureController.shared.startCapture()
             }
@@ -179,7 +188,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ShortcutPolicy.refresh()
         statusItem?.button?.toolTip = GlobalHotKey.lastResumeError.map { "Scapare：" + $0 } ?? "Scapare"
     }
-    func applicationWillTerminate(_ notification: Notification) { if let localKeys { NSEvent.removeMonitor(localKeys) }; PinManager.shared.saveNow(); AutomationController.shared.stop(); gestureMonitor?.stop(); hotCornerMonitor?.stop() }
+    func applicationWillTerminate(_ notification: Notification) {
+        if let localKeys { NSEvent.removeMonitor(localKeys) }
+        for observer in keyWindowObservers { NotificationCenter.default.removeObserver(observer) }
+        PinManager.shared.saveNow(); AutomationController.shared.stop(); gestureMonitor?.stop(); hotCornerMonitor?.stop()
+    }
     private func handleLocalShortcut(_ event: NSEvent) -> NSEvent? {
         let responder = NSApp.keyWindow?.firstResponder
         guard !(responder is NSTextView), !(responder is ShortcutRecorder), !(responder is EditorView), NSApp.modalWindow == nil else { return event }

@@ -36,7 +36,9 @@ scripts/test.sh
 
 Bundle ID 保留 `com.gaoyiming.SnapTool`，用于继续已有 App Store Connect 记录和本地偏好设置身份。它不是面向用户的产品名称。Apple 规定，上传过构建后不能在原有 App 记录中更改 Bundle ID。
 
-当前版本为 **1.1.6（构建 11）**，补上窗口两侧及内部侧栏圆角的识别，避免固定边缘随每一帧重复追加；回滚时保留长图原有末尾正文。233 项回归检查和 12 项附件边缘重放检查通过，用户确认固定侧边栏、固定顶边栏两个实际场景均正常。源码已同步 GitHub，2026-10-04 14:10 已提交 App Store 审核，当前状态为「等待审核」，通过后自动发布。Bundle ID 继续沿用原 App Store 记录。详见[圆角修复记录](docs/rounded-window-edges-2026-10-04.md)、[上一版开源调研](docs/scroll-capture-research-2026-10-04.md)和[本次发布记录](docs/appstore-release-1.1.6-2026-10-04.md)。
+当前本地开发版为 **1.1.7（构建 12）**：快捷键截图使用不切换前台应用、无显示动画的面板；放大镜改为默认关闭，框选后不显示；可见桌面贴图可纳入再次截图和窗口框选。详见[本轮交互修复](docs/capture-polish-2026-10-06.md)。
+
+上一版 1.1.6（11）包含固定窗口/侧栏圆角去重修复，用户确认固定侧边栏、固定顶边栏实测正常；2026-10-04 14:10 已提交 App Store 审核。本轮尚未同步发布 1.1.7，商店进度以 App Store Connect 为准。详见[圆角修复记录](docs/rounded-window-edges-2026-10-04.md)、[开源调研](docs/scroll-capture-research-2026-10-04.md)和[1.1.6 发布记录](docs/appstore-release-1.1.6-2026-10-04.md)。Bundle ID 继续沿用原 App Store 记录。
 
 ## 当前文档
 

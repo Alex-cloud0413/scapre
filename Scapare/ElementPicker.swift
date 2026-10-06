@@ -51,7 +51,7 @@ final class HotCornerMonitor {
     }
     func stop() { timer?.invalidate(); timer = nil }
     private func poll() {
-        guard UserDefaults.standard.bool(forKey: "hot_corner"), !NSApp.isActive, !ShortcutPolicy.isIgnored else { enteredAt = nil; fired = false; return }
+        guard UserDefaults.standard.bool(forKey: "hot_corner"), !ShortcutPolicy.ownsKeyboardFocus, !ShortcutPolicy.isIgnored else { enteredAt = nil; fired = false; return }
         let point = NSEvent.mouseLocation
         let points = NSScreen.screens.flatMap { screen in
             let f = screen.frame

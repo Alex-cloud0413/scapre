@@ -48,12 +48,11 @@ final class CaptureController {
                     }
                     let overlay = OverlayController(shot: shot, controller: self, session: session)
                     overlays.append(overlay)
-                    overlay.show()
                     if let rect = session.snapshot.selection { overlay.editor.setSelection(rect) }
                 }
-                overlays.first { $0.screen.frame.contains(pointer) }?.window.makeKeyAndOrderFront(nil)
                 updateHistoryStatus(message: mode == .long ? "先框选滚动内容（避开固定页眉），再点工具条的长截图按钮" : nil)
-                NSApp.activate(ignoringOtherApps: true)
+                for overlay in overlays { overlay.show() }
+                (overlays.first { $0.screen.frame.contains(pointer) } ?? overlays.first)?.window.makeKey()
             } catch {
                 isCapturing = false
                 PermissionHelper.showCaptureError(error) { [weak self] in self?.startCapture() }
@@ -95,7 +94,11 @@ final class CaptureController {
         }
         overlays.removeAll()
         isCapturing = false
-        sourceApplication?.activate(options: [])
+        // A nonactivating capture panel leaves the source app active. Only a
+        // modal operation that actually activated Scapare needs a handoff.
+        if NSApp.isActive, sourceApplication?.processIdentifier != ProcessInfo.processInfo.processIdentifier {
+            sourceApplication?.activate(options: [])
+        }
     }
     func cancel() { guard !isSaving else { return }; dismissOverlays() }
     func copyToClipboard(_ image: NSImage) {

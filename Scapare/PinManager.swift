@@ -3,6 +3,7 @@ import AppKit
 final class PinManager {
     static let shared = PinManager()
     private(set) var controllers: [PinWindowController] = []
+    var captureWindowIDs: Set<CGWindowID> { Set(controllers.compactMap(\.captureWindowID)) }
     private var preserveFailedArchive = false
     private var saveTask: Task<Void, Never>?
     private(set) var lastSaveError: String?

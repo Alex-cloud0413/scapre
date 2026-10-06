@@ -55,6 +55,13 @@ enum ScreenshotEngine {
             guard let id = info[kCGWindowNumber as String] as? UInt32 else { return nil }; return (id, index)
         })
         let ownApps = content.applications.filter { $0.processID == ProcessInfo.processInfo.processIdentifier }
+        // Keep visible desktop pins in the captured scene, while excluding our
+        // editors, capture overlays, settings and other transient windows.
+        let pinIDs = PinManager.shared.captureWindowIDs
+        let pinnedWindows = content.windows.filter {
+            $0.owningApplication?.processID == ProcessInfo.processInfo.processIdentifier
+                && $0.isOnScreen && pinIDs.contains($0.windowID)
+        }
         let foregroundPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
         let referenceHeight = NSScreen.screens.first?.frame.height ?? 0
         var results: [DisplayShot] = []
@@ -64,7 +71,7 @@ enum ScreenshotEngine {
             }) else { continue }
 
             let scale = Int(screen.backingScaleFactor)
-            let filter = SCContentFilter(display: display, excludingApplications: ownApps, exceptingWindows: [])
+            let filter = SCContentFilter(display: display, excludingApplications: ownApps, exceptingWindows: pinnedWindows)
             let config = SCStreamConfiguration()
             config.width = display.width * scale      // 按真实像素拍，保证清晰
             config.height = display.height * scale
@@ -74,7 +81,11 @@ enum ScreenshotEngine {
             do {
                 let cgImage = try await SCScreenshotManager.captureImage(
                     contentFilter: filter, configuration: config)
-                let candidates = content.windows.filter { $0.isOnScreen && $0.windowLayer == 0 && $0.owningApplication?.processID != ProcessInfo.processInfo.processIdentifier && $0.frame.width > 20 && $0.frame.height > 20 }.sorted { (zOrder[$0.windowID] ?? Int.max) < (zOrder[$1.windowID] ?? Int.max) }
+                let candidates = content.windows.filter {
+                    $0.isOnScreen && $0.frame.width > 20 && $0.frame.height > 20
+                        && (($0.windowLayer == 0 && $0.owningApplication?.processID != ProcessInfo.processInfo.processIdentifier)
+                            || pinIDs.contains($0.windowID))
+                }.sorted { (zOrder[$0.windowID] ?? Int.max) < (zOrder[$1.windowID] ?? Int.max) }
                 func localFrame(_ window: SCWindow) -> CGRect {
                     CGRect(x: window.frame.minX - screen.frame.minX, y: referenceHeight - window.frame.maxY - screen.frame.minY,
                            width: window.frame.width, height: window.frame.height).intersection(CGRect(origin: .zero, size: screen.frame.size))

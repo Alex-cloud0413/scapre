@@ -12,7 +12,7 @@ struct AppearanceOptions: Codable, Equatable {
     var magnifierSize: Double = 96
     var magnifierRound = false
     var magnifierCrosshair = true
-    var magnifierVisible = true
+    var magnifierVisible = false
     var pinOpacity: Double = 1
     var palette = ["CC0000", "FF3B30", "FF9500", "FFCC00", "34C759", "007AFF", "AF52DE", "FFFFFF", "000000"]
     var isValid: Bool {
@@ -28,6 +28,14 @@ struct AppearanceOptions: Codable, Equatable {
 enum AppearanceSettings {
     static let changed = Notification.Name("ScapareAppearanceChanged")
     static let statusSymbols = ["longjuan", "scissors", "camera", "viewfinder", "crop"]
+    static func migrateCaptureMagnifier(in defaults: UserDefaults = .standard) {
+        guard !defaults.bool(forKey: "capture_magnifier_opt_in_v1") else { return }
+        var value = options(in: defaults)
+        value.magnifierVisible = false
+        guard let data = try? JSONEncoder().encode(value) else { return }
+        defaults.set(data, forKey: "appearance_v1")
+        defaults.set(true, forKey: "capture_magnifier_opt_in_v1")
+    }
     static func migrateBrandIcon(in defaults: UserDefaults = .standard) {
         guard !defaults.bool(forKey: "longjuan_icon_migrated_v1") else { return }
         var value = options(in: defaults)

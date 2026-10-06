@@ -10,9 +10,9 @@ import AppKit
 
 // 普通的无边框窗口默认无法成为「键盘焦点」窗口，导致收不到键盘事件(比如 Esc)。
 // 这里重写一下让它可以接收键鼠。
-final class KeyableWindow: NSWindow {
+final class KeyableWindow: NSPanel {
     override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { true }
+    override var canBecomeMain: Bool { false }
 }
 
 @MainActor
@@ -29,12 +29,15 @@ final class OverlayController {
         editor.frame = CGRect(origin: .zero, size: frame.size)
 
         window = KeyableWindow(contentRect: frame,
-                               styleMask: .borderless,
+                               styleMask: [.borderless, .nonactivatingPanel],
                                backing: .buffered,
                                defer: false)
-        window.isOpaque = false
-        window.backgroundColor = .clear
+        window.isOpaque = true
+        window.backgroundColor = .black
         window.hasShadow = false
+        window.animationBehavior = .none
+        window.hidesOnDeactivate = false
+        window.isReleasedWhenClosed = false
         window.contentView = editor
         // 盖在所有东西之上，包括菜单栏和 Dock。
         window.level = NSWindow.Level(rawValue: Int(CGShieldingWindowLevel()))
@@ -44,7 +47,12 @@ final class OverlayController {
     }
 
     func show() {
-        window.makeKeyAndOrderFront(nil)
+        // Paint the frozen desktop before revealing it. Only the screen under the
+        // pointer takes keyboard focus; displaying the other screens must not
+        // activate the app or briefly reveal an empty backing surface.
+        editor.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        window.orderFrontRegardless()
     }
 
     func close() {

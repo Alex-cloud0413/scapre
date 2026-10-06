@@ -31,7 +31,7 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
     private var lastElementQuery = Date.distantPast
     private var elementIndex = 0
     private var decoration = ImageDecoration()
-    private var showMagnifier = AppearanceSettings.options.magnifierVisible
+    private var showMagnifier: Bool
     private var fixedRatio: CGFloat?
     private var annotationStyle = Annotation(tool: .rectangle, color: .red, lineWidth: 2)
     private var selectedIndices: Set<Int> = []
@@ -89,7 +89,9 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
 
     // MARK: - 初始化
 
-    init(shot: DisplayShot, controller: CaptureController, session: EditingSession, canvasSize: CGSize? = nil) {
+    init(shot: DisplayShot, controller: CaptureController, session: EditingSession, canvasSize: CGSize? = nil,
+         magnifierVisible: Bool? = nil) {
+        showMagnifier = magnifierVisible ?? AppearanceSettings.options.magnifierVisible
         self.session = session
         self.shot = shot
         self.controller = controller
@@ -208,7 +210,7 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
             AppearanceSettings.accent.setStroke()
             let outline = NSBezierPath(rect: hoverWindow); outline.lineWidth = 2; outline.stroke()
         }
-        if showMagnifier, let point = hoverPoint, activeTool == nil, textView == nil { drawMagnifier(at: point) }
+        if showMagnifier, selection == nil, let point = hoverPoint, activeTool == nil, textView == nil { drawMagnifier(at: point) }
         guard let sel = selection else { return }
 
         // 3. 选区里的标注(裁剪到选区内)。

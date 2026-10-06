@@ -14,6 +14,10 @@ final class PinWindowController: NSObject, NSWindowDelegate {
     private var gifPaused = false
     private var gifSpeed: Double = 1
     var currentImage: NSImage? { displayImage }
+    var captureWindowID: CGWindowID? {
+        guard !record.hidden, window.isVisible, window.windowNumber > 0 else { return nil }
+        return CGWindowID(window.windowNumber)
+    }
     init(record: PinRecord) {
         self.record = record
         self.fullFrame = record.normalFrame

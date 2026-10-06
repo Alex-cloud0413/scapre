@@ -560,6 +560,21 @@ struct RegressionTests {
         check(!options.isValid, "Appearance import rejects invalid dimensions")
         options = AppearanceOptions(); options.palette = ["FF0000", "0000FF"]
         try check(try JSONDecoder().decode(AppearanceOptions.self, from: JSONEncoder().encode(options)) == options, "Shared appearance preserves palette order and settings")
+        check(!AppearanceOptions().magnifierVisible, "New captures do not show the pixel magnifier by default")
+        var oldCaptureAppearance = AppearanceOptions()
+        oldCaptureAppearance.magnifierVisible = true
+        oldCaptureAppearance.accent = "123456"
+        oldCaptureAppearance.pinOpacity = 0.6
+        defaults.set(try JSONEncoder().encode(oldCaptureAppearance), forKey: "appearance_v1")
+        AppearanceSettings.migrateCaptureMagnifier(in: defaults)
+        var migratedCaptureAppearance = AppearanceSettings.options(in: defaults)
+        check(!migratedCaptureAppearance.magnifierVisible && migratedCaptureAppearance.accent == "123456"
+              && migratedCaptureAppearance.pinOpacity == 0.6, "Upgrade disables the old automatic magnifier while preserving other appearance settings")
+        migratedCaptureAppearance.magnifierVisible = true
+        defaults.set(try JSONEncoder().encode(migratedCaptureAppearance), forKey: "appearance_v1")
+        AppearanceSettings.migrateCaptureMagnifier(in: defaults)
+        check(AppearanceSettings.options(in: defaults).magnifierVisible,
+              "An explicit magnifier preference after upgrade survives subsequent launches")
         styled.fontName = "Helvetica"; styled.textOutlineColor = "123456"; styled.arrowStyle = 1
         let richAnnotation = try JSONDecoder().decode(Annotation.self, from: JSONEncoder().encode(styled))
         check(richAnnotation.fontName == "Helvetica" && richAnnotation.textOutlineColor == "123456" && richAnnotation.arrowStyle == 1, "Backup preserves custom fonts, outline colors and arrow styles")
@@ -576,6 +591,74 @@ struct RegressionTests {
         })
         let editor = EditorView(shot: DisplayShot(screen: screen, image: frame1.image()!),
                                 controller: capture, session: editorSession, canvasSize: CGSize(width: 1200, height: 800))
+        let overlay = OverlayController(shot: DisplayShot(screen: screen, image: frame1.image()!),
+                                        controller: capture, session: EditingSession())
+        check(overlay.window.styleMask.contains(.nonactivatingPanel) && !overlay.window.canBecomeMain
+              && overlay.window.canBecomeKey, "Capture panel accepts keyboard input without becoming the main app window")
+        check(overlay.window.animationBehavior == .none && overlay.window.isOpaque
+              && !overlay.window.hidesOnDeactivate, "Capture has no window animation or transparent first-frame surface")
+        let focusProbe = KeyableWindow(contentRect: CGRect(x: screen.frame.maxX + 10000, y: 10000, width: 40, height: 40),
+            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        focusProbe.isReleasedWhenClosed = false; focusProbe.hidesOnDeactivate = false; focusProbe.animationBehavior = .none
+        let activeSourcePID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        focusProbe.orderFrontRegardless(); focusProbe.makeKey()
+        check(focusProbe.isKeyWindow && ShortcutPolicy.ownsKeyboardFocus,
+              "A nonactivating capture panel pauses global shortcuts while owning keyboard focus")
+        check(NSWorkspace.shared.frontmostApplication?.processIdentifier == activeSourcePID,
+              "Taking capture keyboard focus leaves the source application active")
+        focusProbe.orderOut(nil)
+        check(!focusProbe.isKeyWindow, "Closing the capture panel releases its keyboard focus")
+
+        // Compare actual AppKit raster output, including a magnifier deliberately
+        // enabled by the user. Selecting a region must remove it immediately.
+        let loupeShot = DisplayShot(screen: screen, image: frame1.image()!)
+        let loupeEditor = EditorView(shot: loupeShot, controller: capture, session: EditingSession(),
+                                    canvasSize: CGSize(width: 1200, height: 800), magnifierVisible: true)
+        let plainEditor = EditorView(shot: loupeShot, controller: capture, session: EditingSession(),
+                                    canvasSize: CGSize(width: 1200, height: 800), magnifierVisible: false)
+        let loupePoint = CGPoint(x: 360, y: 550)
+        let loupeEvent = NSEvent.mouseEvent(with: .mouseMoved, location: loupePoint, modifierFlags: [], timestamp: 0,
+                                           windowNumber: 0, context: nil, eventNumber: 0, clickCount: 0, pressure: 0)!
+        func renderedEditor(_ view: EditorView) throws -> PixelRaster {
+            let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds)!
+            view.cacheDisplay(in: view.bounds, to: bitmap)
+            return try PixelRaster(bitmap.cgImage!)
+        }
+        func loupePixels(_ raster: PixelRaster) -> [UInt8] {
+            var pixels: [UInt8] = []
+            let scaleX = Double(raster.width) / 1200, scaleY = Double(raster.height) / 800
+            for y in Int(280 * scaleY)..<Int(380 * scaleY) { for x in Int(382 * scaleX)..<Int(480 * scaleX) {
+                let offset = (y * raster.width + x) * 4
+                pixels.append(contentsOf: raster.bytes[offset..<(offset + 4)])
+            } }
+            return pixels
+        }
+        loupeEditor.mouseMoved(with: loupeEvent); plainEditor.mouseMoved(with: loupeEvent)
+        let withLoupe = try renderedEditor(loupeEditor), withoutLoupe = try renderedEditor(plainEditor)
+        check(loupePixels(withLoupe) != loupePixels(withoutLoupe), "An explicitly enabled magnifier is still available before selection")
+        loupeEditor.setSelection(CGRect(x: 700, y: 100, width: 200, height: 100))
+        let afterSelecting = try renderedEditor(loupeEditor)
+        check(loupePixels(afterSelecting) == loupePixels(withoutLoupe), "Drawing a selection removes the entire pixel magnifier from the captured surface")
+        if let renderPath = ProcessInfo.processInfo.environment["SCAPARE_TEST_RENDER_DIR"] {
+            let folder = URL(fileURLWithPath: renderPath)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            for (name, raster) in [("magnifier-before-selection", withLoupe), ("magnifier-after-selection", afterSelecting)] {
+                let rep = NSBitmapImageRep(cgImage: raster.image()!)
+                try rep.representation(using: .png, properties: [:])?.write(to: folder.appendingPathComponent(name + ".png"))
+            }
+        }
+        let pinImageData = NSImage(cgImage: frame1.image()!, size: CGSize(width: 96, height: 240)).pngData!
+        let capturePin = PinWindowController(record: PinRecord(imageData: pinImageData,
+            frame: CGRect(x: -10000, y: -10000, width: 96, height: 240)))
+        check(capturePin.captureWindowID == nil, "A pin that has not been displayed cannot leak into the capture exceptions")
+        capturePin.window.orderFrontRegardless()
+        let retainedPinID = capturePin.captureWindowID
+        check(retainedPinID == CGWindowID(capturePin.window.windowNumber), "A displayed pin is eligible for ScreenCaptureKit's own-app exception")
+        capturePin.setHidden(true)
+        check(capturePin.captureWindowID == nil, "A deliberately hidden pin is excluded from subsequent captures")
+        capturePin.window.orderFrontRegardless()
+        check(capturePin.captureWindowID == nil, "Hidden pin state takes precedence over stale window visibility")
+        capturePin.dispose()
         editor.setSelection(CGRect(x: 100, y: 160, width: 360, height: 240))
         func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
         let toolbar = descendants(editor).compactMap { $0 as? EditorToolbar }.first!
