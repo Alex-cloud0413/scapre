@@ -18,6 +18,7 @@ nonisolated struct ScrollCaptureProgress: Sendable {
 actor ScrollCaptureAssembler {
     private var stitcher: ScrollStitcher?
     private var completedStrips: [PixelRaster] = []
+    private var completedSidebars: [ScrollSidebarOverlay] = []
     private var completedHeight = 0
     private var completedFrames = 0
     private var completedPages = 0
@@ -44,6 +45,7 @@ actor ScrollCaptureAssembler {
             guard raster.width > 0, raster.height > 0, raster.height <= available else { throw ImageError.tooLarge }
             let next = ScrollStitcher(first: raster, maxHeight: available)
             if let prior, let current = stitcher {
+                completedSidebars.append(contentsOf: prior.sidebars.map { $0.offset(by: completedHeight) })
                 completedStrips.append(contentsOf: prior.strips)
                 completedStrips.append(PixelRaster(width: raster.width, height: separatorHeight,
                     bytes: [UInt8](repeating: 255, count: raster.width * separatorHeight * 4)))
@@ -61,7 +63,9 @@ actor ScrollCaptureAssembler {
     }
     private var result: ScrollImagePieces? {
         guard let stitcher else { return nil }
-        return ScrollImagePieces(width: stitcher.previous.width, strips: completedStrips + stitcher.result.strips)
+        let active = stitcher.result
+        return ScrollImagePieces(width: stitcher.previous.width, strips: completedStrips + active.strips,
+            sidebars: completedSidebars + active.sidebars.map { $0.offset(by: completedHeight) })
     }
     func image() -> CGImage? { result?.image() }
 }

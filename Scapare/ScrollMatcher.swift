@@ -313,7 +313,8 @@ nonisolated enum ScrollMatcher {
     /// Only treat an edge as fixed when it contains actual stationary texture.
     /// A white margin alone must never remove document content.
     static func fixedEdges(_ previous: PixelRaster, _ next: PixelRaster,
-                           previousFeatures a: ScrollFeatures, nextFeatures b: ScrollFeatures) -> (top: Int, bottom: Int) {
+                           previousFeatures a: ScrollFeatures, nextFeatures b: ScrollFeatures,
+                           excludingColumns: [Range<Int>] = []) -> (top: Int, bottom: Int) {
         let sampled = fixedEdges(a, b)
         // The motion descriptor deliberately ignores the outermost columns.
         // Window and pane corners at either end often exist ONLY there, while the center of
@@ -324,6 +325,7 @@ nonisolated enum ScrollMatcher {
         func decoration(top: Bool, sampled: Int) -> Int {
             var length = sampled
             for x in 0..<width {
+                if excludingColumns.contains(where: { $0.contains(x) }) { continue }
                 var contrast = 0, lastEdge = 0, stableRows = 0
                 for depth in 0..<limit {
                     let y = top ? depth : previous.height - 1 - depth

@@ -67,6 +67,7 @@ nonisolated struct ScrollStitcher: Sendable {
     private var furthestPosition = 0
     private var leadingStrips: [PixelRaster] = []
     private var header: PixelRaster?
+    private var sidebars: [ScrollFixedSidebar] = []
     private var recent: (raster: PixelRaster, features: ScrollFeatures, position: Double)?
     private(set) var recoveredMatches = 0
     private var didSetFixedEdges = false
@@ -89,10 +90,6 @@ nonisolated struct ScrollStitcher: Sendable {
         if !didSetFixedEdges, !ScrollMatcher.isUnchanged(previous, next) {
             let edges = ScrollMatcher.fixedEdges(features, nextFeatures)
             top = edges.top; bottom = edges.bottom
-            // Partial-width decorations belong to the output footer, but the
-            // moving text between them remains valid evidence for alignment.
-            let decorations = ScrollMatcher.fixedEdges(previous, next, previousFeatures: features, nextFeatures: nextFeatures)
-            outputTop = decorations.top; outputBottom = decorations.bottom
         }
         let nextPosition: Double
         var recovered = false
@@ -122,6 +119,22 @@ nonisolated struct ScrollStitcher: Sendable {
         let shift = nextPosition - position
         guard shift != 0 else { return false }
         let roundedPosition = Int(nextPosition.rounded())
+        if !didSetFixedEdges, roundedPosition == 0 {
+            // Subpixel startup has not exposed a new physical row yet. Keep
+            // tracking it without permanently classifying its panes as empty.
+            recent = (next, nextFeatures, nextPosition)
+            return false
+        }
+        var detectedSidebars = sidebars
+        if !didSetFixedEdges {
+            let ranges = ScrollFixedSidebar.detect(previous, next, top: top, bottom: bottom, shift: Int(shift.rounded()))
+            // Sidebar labels near a viewport edge are not a fixed page header
+            // or footer. Keep partial window decorations outside those panes.
+            let decorations = ScrollMatcher.fixedEdges(previous, next, previousFeatures: features,
+                nextFeatures: nextFeatures, excludingColumns: ranges)
+            outputTop = decorations.top; outputBottom = decorations.bottom
+            detectedSidebars = ranges.map { ScrollFixedSidebar(source: previous, columns: $0, top: outputTop, bottom: outputBottom) }
+        }
         let prependRows = max(0, earliestPosition - roundedPosition)
         let appendRows = max(0, roundedPosition - furthestPosition)
         let newRows = prependRows + appendRows
@@ -137,6 +150,7 @@ nonisolated struct ScrollStitcher: Sendable {
             if outputBottom > 0 { footer = first.rows((first.height - outputBottom)..<first.height) }
         }
         didSetFixedEdges = true
+        sidebars = detectedSidebars
         fixedTop = top; fixedBottom = bottom; headerHeight = outputTop; footerHeight = outputBottom
         if outputTop > 0, roundedPosition <= earliestPosition { header = next.rows(0..<outputTop) }
         if outputBottom > 0, roundedPosition >= furthestPosition {
@@ -163,7 +177,8 @@ nonisolated struct ScrollStitcher: Sendable {
     }
     var result: ScrollImagePieces {
         ScrollImagePieces(width: previous.width,
-            strips: (header.map { [$0] } ?? []) + Array(leadingStrips.reversed()) + strips + (footer.map { [$0] } ?? []))
+            strips: (header.map { [$0] } ?? []) + Array(leadingStrips.reversed()) + strips + (footer.map { [$0] } ?? []),
+            sidebars: sidebars.map { ScrollSidebarOverlay(sidebar: $0, top: headerHeight, height: height - headerHeight - footerHeight) })
     }
     func image() -> CGImage? { result.image() }
     func preview(maxSize: CGSize) -> CGImage? { result.preview(maxSize: maxSize) }
@@ -174,10 +189,13 @@ nonisolated struct ScrollStitcher: Sendable {
 nonisolated struct ScrollImagePieces: Sendable {
     let width: Int
     let strips: [PixelRaster]
+    var sidebars: [ScrollSidebarOverlay] = []
     var height: Int { strips.reduce(0) { $0 + $1.height } }
     func image() -> CGImage? {
         guard height > 0 else { return nil }
-        return PixelRaster(width: width, height: height, bytes: strips.flatMap(\.bytes)).image()
+        var bytes = strips.flatMap(\.bytes)
+        for sidebar in sidebars { sidebar.apply(to: &bytes, width: width) }
+        return PixelRaster(width: width, height: height, bytes: bytes).image()
     }
     func preview(maxSize: CGSize) -> CGImage? {
         let height = height
@@ -196,6 +214,7 @@ nonisolated struct ScrollImagePieces: Sendable {
             context.draw(image, in: CGRect(x: 0, y: y0, width: CGFloat(w), height: y1 - y0))
             top = bottom
         }
+        for sidebar in sidebars { sidebar.draw(in: context, outputHeight: height, xScale: CGFloat(w) / CGFloat(width), yScale: CGFloat(h) / CGFloat(height)) }
         return context.makeImage()
     }
 }
