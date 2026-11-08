@@ -54,8 +54,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // First launch and manual reopening share the same feature guide.
         if !SettingsManager.setupCompleted {
-            DispatchQueue.main.async {
-                FeatureGuideController.show(firstRun: true)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                FeatureGuideController.show(firstRun: true, openSettings: self.openSettingsAction)
             }
         }
     }
@@ -66,13 +67,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             try updateShortcut(keyCode: SettingsManager.keyCode, modifiers: SettingsManager.modifiers)
         } catch {
-            DispatchQueue.main.async {
+            DispatchQueue.main.async { [weak self] in
                 let alert = NSAlert()
                 alert.messageText = "截图快捷键不可用"
                 alert.informativeText = "可以通过菜单栏截图，或在设置中选择其他快捷键。\n\(error.localizedDescription)"
                 alert.addButton(withTitle: "打开设置")
                 alert.addButton(withTitle: "稍后")
-                if alert.runModal() == .alertFirstButtonReturn { SetupWindowController.showSettings() }
+                if alert.runModal() == .alertFirstButtonReturn { self?.openSettingsAction() }
             }
         }
     }
@@ -251,10 +252,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openSettingsAction() {
-        SetupWindowController.showSettings()
+        SetupWindowController.showSettings(updateShortcut: updateShortcut)
     }
 
-    @objc private func showFeatureGuideAction() { FeatureGuideController.show() }
+    @objc private func showFeatureGuideAction() { FeatureGuideController.show(openSettings: openSettingsAction) }
 
     @objc private func showAboutAction() {
         showAbout()

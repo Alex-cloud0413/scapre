@@ -3,7 +3,7 @@
 //  Scapare
 //
 //  选区下方的浮动工具条。从左到右：
-//    标注工具(矩形/椭圆/箭头/画笔/文字) | 颜色 | 粗细 | 撤销 | 文字识别/钉图/保存/复制/取消
+//    标注工具(矩形/椭圆/箭头/直线/画笔/文字) | 颜色 | 粗细 | 撤销 | 文字识别/钉图/保存/复制/取消
 //
 
 import AppKit
@@ -101,6 +101,7 @@ final class EditorToolbar: NSView {
         addTool(to: stack, tool: .rectangle, symbol: "rectangle", tip: "矩形")
         addTool(to: stack, tool: .ellipse, symbol: "circle", tip: "椭圆")
         addTool(to: stack, tool: .arrow, symbol: "arrow.up.right", tip: "箭头")
+        addTool(to: stack, tool: .line, symbol: "line.diagonal", tip: "直线（按住 ⇧ 锁定方向）")
         addTool(to: stack, tool: .pen, symbol: "pencil.tip", tip: "画笔")
         addTool(to: stack, tool: .text, symbol: "textformat", tip: "文字")
 

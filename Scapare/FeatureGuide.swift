@@ -58,6 +58,7 @@ final class FeatureGuideController: NSObject, NSWindowDelegate, NSTableViewDataS
     private let isFirstRun: Bool
     private let defaults: UserDefaults
     private let practicePasteboard: NSPasteboard
+    private let openSettingsAction: (() -> Void)?
     private let topics = NSTableView()
     private let detail = NSStackView()
     private let detailScroll = NSScrollView()
@@ -65,8 +66,8 @@ final class FeatureGuideController: NSObject, NSWindowDelegate, NSTableViewDataS
     private(set) var practice: GuidePracticeView?
     let doneButton: NSButton
 
-    static func show(firstRun: Bool = false) {
-        let controller = current ?? FeatureGuideController(isFirstRun: firstRun)
+    static func show(firstRun: Bool = false, openSettings: @escaping () -> Void) {
+        let controller = current ?? FeatureGuideController(isFirstRun: firstRun, openSettings: openSettings)
         current = controller
         controller.refreshShortcut()
         NSApp.activate(ignoringOtherApps: true)
@@ -74,10 +75,12 @@ final class FeatureGuideController: NSObject, NSWindowDelegate, NSTableViewDataS
         controller.window.makeKeyAndOrderFront(nil)
     }
 
-    init(isFirstRun: Bool, defaults: UserDefaults = .standard, pasteboard: NSPasteboard = .general) {
+    init(isFirstRun: Bool, defaults: UserDefaults = .standard, pasteboard: NSPasteboard = .general,
+         openSettings: (() -> Void)? = nil) {
         self.isFirstRun = isFirstRun
         self.defaults = defaults
         practicePasteboard = pasteboard
+        openSettingsAction = openSettings
         window = FeatureGuideWindow(contentRect: CGRect(x: 0, y: 0, width: 1080, height: 740),
                                     styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         doneButton = NSButton(title: isFirstRun ? "开始使用" : "完成", target: nil, action: nil)
@@ -217,7 +220,7 @@ final class FeatureGuideController: NSObject, NSWindowDelegate, NSTableViewDataS
     }
     private func refreshShortcut() { shortcut.stringValue = "截图快捷键：\(SettingsManager.currentShortcutString)" }
     func windowDidBecomeKey(_ notification: Notification) { refreshShortcut() }
-    @objc private func openSettings() { SetupWindowController.showSettings() }
+    @objc private func openSettings() { openSettingsAction?() }
     @objc private func finish() { window.close() }
     func windowWillClose(_ notification: Notification) {
         practice?.dispose()

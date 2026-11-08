@@ -4,36 +4,32 @@ import ServiceManagement
 @MainActor
 final class SetupWindowController: NSObject, NSWindowDelegate {
     private static var current: SetupWindowController?
-    private let window: NSWindow
+    let window: NSWindow
     private let recorder: ShortcutRecorder
     private let shortcutStatus = NSTextField(wrappingLabelWithString: "")
     private let loginStatus = NSTextField(wrappingLabelWithString: "")
     private let loginCheckbox = NSButton(checkboxWithTitle: "登录时启动 Scapare", target: nil, action: nil)
     private let loginSettingsButton = NSButton(title: "打开登录项设置…", target: nil, action: nil)
-    private let isFirstRun: Bool
-    var onDismiss: (() -> Void)?
+    private let updateShortcut: (UInt32, UInt32) throws -> Void
 
-    static func showSetup(completion: @escaping () -> Void) { show(firstRun: true, completion: completion) }
-    static func showSettings() { show(firstRun: false, completion: nil) }
-    private static func show(firstRun: Bool, completion: (() -> Void)?) {
+    static func showSettings(updateShortcut: @escaping (UInt32, UInt32) throws -> Void) {
         if let existing = current {
             NSApp.activate(ignoringOtherApps: true)
             existing.window.makeKeyAndOrderFront(nil)
             return
         }
-        let controller = SetupWindowController(isFirstRun: firstRun)
-        controller.onDismiss = completion
+        let controller = SetupWindowController(updateShortcut: updateShortcut)
         current = controller
         NSApp.activate(ignoringOtherApps: true)
         controller.window.center()
         controller.window.makeKeyAndOrderFront(nil)
     }
-    private init(isFirstRun: Bool) {
-        self.isFirstRun = isFirstRun
+    init(updateShortcut: @escaping (UInt32, UInt32) throws -> Void) {
+        self.updateShortcut = updateShortcut
         recorder = ShortcutRecorder(keyCode: SettingsManager.keyCode, modifiers: SettingsManager.modifiers)
         window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 420, height: 390),
                           styleMask: [.titled, .closable], backing: .buffered, defer: false)
-        window.title = isFirstRun ? "欢迎使用 Scapare" : "Scapare 设置"
+        window.title = "Scapare 设置"
         window.isReleasedWhenClosed = false
         super.init()
         window.delegate = self
@@ -46,18 +42,14 @@ final class SetupWindowController: NSObject, NSWindowDelegate {
         shortcutStatus.font = .systemFont(ofSize: 12)
         loginStatus.textColor = .secondaryLabelColor
         loginStatus.font = .systemFont(ofSize: 12)
-        recorder.onShortcutChanged = { key, modifiers in
-            guard let app = NSApp.delegate as? AppDelegate else {
-                throw NSError(domain: "Scapare", code: 1, userInfo: [NSLocalizedDescriptionKey: "无法更新快捷键，请重新打开 App。"])
-            }
-            try app.updateShortcut(keyCode: key, modifiers: modifiers)
-        }
+        // SwiftUI owns NSApp.delegate; the live AppDelegate supplies its update action.
+        recorder.onShortcutChanged = updateShortcut
         recorder.onError = { [weak self] message in self?.shortcutStatus.stringValue = message }
         loginCheckbox.target = self
         loginCheckbox.action = #selector(toggleLogin)
         loginSettingsButton.target = self
         loginSettingsButton.action = #selector(openLoginSettings)
-        let done = NSButton(title: isFirstRun ? "开始使用" : "完成", target: self, action: #selector(dismissTapped))
+        let done = NSButton(title: "完成", target: self, action: #selector(dismissTapped))
         done.bezelStyle = .rounded
         done.keyEquivalent = "\r"
         let guide = NSButton(title: "功能引导", target: self, action: #selector(showFeatureGuide))
@@ -106,15 +98,11 @@ final class SetupWindowController: NSObject, NSWindowDelegate {
         }
     }
     @objc private func openLoginSettings() { SMAppService.openSystemSettingsLoginItems() }
-    @objc private func showFeatureGuide() { FeatureGuideController.show() }
-    @objc private func dismissTapped() {
-        if isFirstRun { SettingsManager.setupCompleted = true }
-        window.close()
+    @objc private func showFeatureGuide() {
+        FeatureGuideController.show { [updateShortcut] in Self.showSettings(updateShortcut: updateShortcut) }
     }
+    @objc private func dismissTapped() { window.close() }
     func windowWillClose(_ notification: Notification) {
-        let completion = onDismiss
-        onDismiss = nil
-        Self.current = nil
-        completion?()
+        if Self.current === self { Self.current = nil }
     }
 }

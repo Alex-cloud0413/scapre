@@ -664,6 +664,45 @@ struct RegressionTests {
         capturePin.dispose()
         editor.setSelection(CGRect(x: 100, y: 160, width: 360, height: 240))
         func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        do {
+            let preferenceKeys = ["shortcut_keyCode", "shortcut_modifiers", "shortcut_hasSet"]
+            let previous = UserDefaults.standard.dictionaryRepresentation()
+            defer {
+                for key in preferenceKeys { UserDefaults.standard.set(previous[key], forKey: key) }
+            }
+            let app = AppDelegate()
+            let settings = SetupWindowController(updateShortcut: app.updateShortcut)
+            let recorder = descendants(settings.window.contentView!).compactMap { $0 as? ShortcutRecorder }.first!
+            let flags: NSEvent.ModifierFlags = [.command, .option, .control, .shift]
+            let modifiers = UInt32(cmdKey | optionKey | controlKey | shiftKey)
+            func record(_ key: Int, _ text: String) {
+                _ = recorder.accessibilityPerformPress()
+                recorder.keyDown(with: NSEvent.keyEvent(with: .keyDown, location: .zero,
+                    modifierFlags: flags, timestamp: 0, windowNumber: 0, context: nil,
+                    characters: text, charactersIgnoringModifiers: text, isARepeat: false, keyCode: UInt16(key))!)
+            }
+            GlobalHotKey.pauseAll()
+            defer { GlobalHotKey.resumeAll() }
+            record(kVK_ANSI_J, "J")
+            check(SettingsManager.keyCode == UInt32(kVK_ANSI_J) && SettingsManager.modifiers == modifiers
+                  && recorder.accessibilityValue() as? String == SettingsManager.currentShortcutString,
+                  "Settings records a new system shortcut without casting NSApp.delegate")
+            do {
+                let occupied = try GlobalHotKey(keyCode: UInt32(kVK_ANSI_K), modifiers: modifiers) {}
+                record(kVK_ANSI_K, "K")
+                check(SettingsManager.keyCode == UInt32(kVK_ANSI_J)
+                      && recorder.accessibilityValue() as? String == SettingsManager.currentShortcutString
+                      && descendants(settings.window.contentView!).compactMap { $0 as? NSTextField }
+                        .contains { $0.stringValue.contains("已分配") },
+                      "Settings explains a conflict and retains the previous registered shortcut")
+                withExtendedLifetime(occupied) {}
+            }
+            record(kVK_ANSI_K, "K")
+            GlobalHotKey.resumeAll()
+            check(SettingsManager.keyCode == UInt32(kVK_ANSI_K) && GlobalHotKey.lastResumeError == nil,
+                  "A replacement recorded while settings has focus becomes active when bindings resume")
+            _ = try GlobalHotKey(keyCode: UInt32(kVK_ANSI_J), modifiers: modifiers) {}
+        }
         // The guide can be reopened without rerunning setup or resetting preferences.
         let guideDefaultsName = "Scapare.Guide.Tests." + UUID().uuidString
         let guideDefaults = UserDefaults(suiteName: guideDefaultsName)!
@@ -859,6 +898,38 @@ struct RegressionTests {
         check(!editor.subviews.contains { $0 is ToolbarHelpBubble }, "Toolbar mouse exit removes the displayed hint")
         let buttons = descendants(toolbar).compactMap { $0 as? NSControl }.filter { $0 is NSButton || $0 is NSSegmentedControl }
         check(!buttons.isEmpty && buttons.allSatisfy { !($0.toolTip ?? "").isEmpty }, "Every toolbar button, menu and width selector has a function hint")
+        let lineButton = buttons.compactMap { $0 as? NSButton }.first { $0.toolTip?.hasPrefix("直线") == true }!
+        check(lineButton.image != nil, "The main toolbar has a dedicated straight-line icon")
+        lineButton.performClick(nil)
+        let beforeLine = editorSession.snapshot
+        func drawLine(from start: CGPoint, to end: CGPoint, flags: NSEvent.ModifierFlags) {
+            for (type, point) in [(NSEvent.EventType.leftMouseDown, start), (.leftMouseDragged, end), (.leftMouseUp, end)] {
+                let event = NSEvent.mouseEvent(with: type, location: editor.convert(point, to: nil), modifierFlags: flags,
+                    timestamp: 0, windowNumber: testWindow.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+                switch type {
+                case .leftMouseDown: editor.mouseDown(with: event)
+                case .leftMouseDragged: editor.mouseDragged(with: event)
+                default: editor.mouseUp(with: event)
+                }
+            }
+        }
+        drawLine(from: CGPoint(x: 140, y: 215), to: CGPoint(x: 300, y: 228), flags: [.shift])
+        let horizontal = editorSession.snapshot.annotations.last!
+        check(horizontal.tool == .line && horizontal.start.y == horizontal.end.y && horizontal.end.x == 300,
+              "Shift draws a horizontal underline with the straight-line tool")
+        let withLine = editorSession.snapshot
+        editorSession.undoManager.undo()
+        check(editorSession.snapshot == beforeLine, "A drawn line can be undone")
+        editorSession.undoManager.redo()
+        check(editorSession.snapshot == withLine, "Redo restores the same line")
+        drawLine(from: CGPoint(x: 150, y: 260), to: CGPoint(x: 310, y: 319), flags: [])
+        let freeLine = editorSession.snapshot.annotations.last!
+        check(freeLine.tool == .line && freeLine.end == CGPoint(x: 310, y: 319), "Without Shift, a line follows the drag endpoint")
+        let lineCrop = editorSession.snapshot.selection!
+        let source = frame1.image()!
+        let baseCrop = ScreenshotRenderer.render(image: source, selection: lineCrop, viewSize: editor.bounds.size, annotations: [])!
+        let annotatedCrop = ScreenshotRenderer.render(image: source, selection: lineCrop, viewSize: editor.bounds.size, annotations: [horizontal, freeLine])!
+        try check(PixelRaster(baseCrop).bytes != PixelRaster(annotatedCrop).bytes, "Straight lines appear in the copy/save image renderer")
 
         let host = NSView(frame: CGRect(x: 0, y: 0, width: 800, height: 600))
         let clippingScroll = NSScrollView(frame: CGRect(x: 200, y: 20, width: 400, height: 44))

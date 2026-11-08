@@ -427,7 +427,8 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
             if currentAnnotation?.tool == .pen || currentAnnotation?.tool == .highlighter {
                 currentAnnotation?.points.append(clampIntoSelection(p))
             } else {
-                currentAnnotation?.end = clampIntoSelection(p)
+                let endpoint = annotationEndpoint(at: p, modifiers: event.modifierFlags)
+                currentAnnotation?.end = endpoint
             }
 
         case .none:
@@ -474,6 +475,11 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
         case .moving, .resizing:
             layoutToolbar()
         case .annotating:
+            if currentAnnotation?.tool == .line {
+                let point = convert(event.locationInWindow, from: nil)
+                let endpoint = annotationEndpoint(at: point, modifiers: event.modifierFlags)
+                currentAnnotation?.end = endpoint
+            }
             if let ann = currentAnnotation, isMeaningful(ann) {
                 annotations.append(ann)
             }
@@ -711,6 +717,20 @@ final class EditorView: NSView, NSTextViewDelegate, NSMenuItemValidation {
         }
         return CGRect(x: min(minX, maxX), y: min(minY, maxY),
                       width: abs(maxX - minX), height: abs(maxY - minY))
+    }
+
+    private func annotationEndpoint(at point: CGPoint, modifiers: NSEvent.ModifierFlags) -> CGPoint {
+        let end = clampIntoSelection(point)
+        guard let annotation = currentAnnotation, annotation.tool == .line, modifiers.contains(.shift) else { return end }
+        let start = annotation.start
+        let dx = end.x - start.x, dy = end.y - start.y
+        let x = abs(dx), y = abs(dy)
+        let threshold = CGFloat(2).squareRoot() - 1  // tan(22.5°)
+        if y <= x * threshold { return CGPoint(x: end.x, y: start.y) }
+        if x <= y * threshold { return CGPoint(x: start.x, y: end.y) }
+        // Keep both coordinates within the selection, even against its edges.
+        let length = min(x, y)
+        return CGPoint(x: start.x + (dx < 0 ? -length : length), y: start.y + (dy < 0 ? -length : length))
     }
 
     private func isMeaningful(_ ann: Annotation) -> Bool {
